@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# Tooling / caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# uv
+uv.lock
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# yak-tracker local config / scratch
+config.local.toml
+*.local.toml
+.yak/
