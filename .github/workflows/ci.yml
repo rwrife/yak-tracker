@@ -26,20 +26,18 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+          python-version: ${{ matrix.python-version }}
 
       - name: Install project (with dev extras)
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --extra dev
 
       - name: Lint (ruff)
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Smoke-test the CLI
         run: |
-          yak --version
-          yak hello ci
+          uv run yak --version
+          uv run yak hello ci
 
       - name: Run tests
-        run: pytest
+        run: uv run pytest
