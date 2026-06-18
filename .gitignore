@@ -23,7 +23,7 @@ htmlcov/
 .tox/
 
 # uv
-uv.lock
+# (uv.lock is committed for reproducible CI/installs of this application)
 
 # Editors / OS
 .vscode/

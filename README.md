@@ -11,7 +11,14 @@ Three outputs from the same data:
 
 ## Status
 
-🚧 Early — building toward v0.1. See [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
+🚧 Early — building toward v0.1. The CLI scaffold (M1) works today; collectors,
+sessionizer, and Ollama narration land next. See [`PLAN.md`](./PLAN.md) for the
+roadmap and milestones.
+
+```bash
+yak --version   # 🐃 it's alive
+yak hello       # placeholder until `yak today` lands
+```
 
 ## Why local-first?
 
@@ -33,6 +40,42 @@ yak raw                        # dump normalized events (no LLM)
 - Python 3.11+
 - bash or zsh history
 - [Ollama](https://ollama.com) running locally (optional — falls back to a raw tree if absent)
+
+## Install
+
+> Requires Python 3.11+. [`uv`](https://docs.astral.sh/uv/) is recommended but optional.
+
+```bash
+# from a clone
+git clone https://github.com/rwrife/yak-tracker
+cd yak-tracker
+uv run yak --version
+```
+
+Or install into the current environment with pip:
+
+```bash
+pip install -e .
+yak --version
+```
+
+## Development
+
+```bash
+uv sync --extra dev      # create .venv with dev deps
+uv run pytest            # run the test suite
+uv run ruff check .      # lint
+```
+
+Without `uv`:
+
+```bash
+pip install -e ".[dev]"
+pytest
+ruff check .
+```
+
+CI runs `ruff` + `pytest` on Python 3.11 and 3.12 for every push and PR.
 
 ## License
 
