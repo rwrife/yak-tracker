@@ -1,0 +1,5 @@
+cd ~/projects/login
+git status
+npm install
+npm run build
+git commit -m "ship it"
