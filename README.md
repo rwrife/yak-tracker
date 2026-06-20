@@ -13,14 +13,16 @@ Three outputs from the same data:
 
 🚧 Early — building toward v0.1. Working today: the CLI scaffold (M1), the
 **shell-history collector (M2)** — `yak raw` parses your bash/zsh history into
-normalized events — and the **git collector + sessionizer (M3)** — `yak
+normalized events — the **git collector + sessionizer (M3)** — `yak
 sessions` interleaves git commits/reflog with shell history and buckets it into
-time-gapped work sessions. Yak-shaving tree and Ollama narration land next. See
+time-gapped work sessions — and the **yak-shaving tree (M4)** — `yak today`
+reconstructs each session as an intention with its rabbit holes nested beneath
+it. Ollama narration lands next. See
 [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
 yak --version   # 🐃 it's alive
-yak hello       # placeholder until `yak today` lands
+yak today       # reconstruct today's coding day as a yak-shaving tree
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 ```
@@ -74,6 +76,48 @@ empty result rather than erroring.
 A session boundary is any gap **strictly greater** than `--idle-gap` minutes
 between consecutive events (default 25). Repos default to the current directory.
 
+## `yak today` — the yak-shaving tree
+
+`yak today` is the headline view. It collects the day's shell + git activity,
+buckets it into sessions (same engine as `yak sessions`), then reconstructs each
+session as a **tree**: a root *intention* with the rabbit holes you fell into
+hanging off (and nested within) it.
+
+```bash
+yak today                         # today, current repo + shell history
+yak today --date 2026-06-17       # a specific day (YYYY-MM-DD)
+yak today --repo ~/code/app -r ~/code/lib   # include several repos
+yak today --idle-gap 15           # split sessions on 15-min gaps (default 25)
+yak today --no-git                # shell history only
+```
+
+```
+🐃 Yak-shaving — 2026-06-17
+#1 🐂 git checkout -b fix-login (15:06)
+├── 📦 npm install left-pad (15:08)
+├── 🔥 rm -rf node_modules (15:09)
+├── 📦 npm install (15:10)
+└── 📂 cd ../shared-utils (15:11)
+    └── • cargo build (15:12)
+  6 event(s), 2 level(s) deep
+```
+
+The tree is built with simple, explainable heuristics:
+
+- **Root intention** — the first commit subject in the session, or the first
+  substantive shell command (bare `cd`/`ls` are skipped).
+- **Detours** open a new node when the work changes context, glyphed by kind:
+  - 📦 **install** — `npm/pip/cargo/brew…` dependency churn
+  - 🔥 **error-fix** — forced recovery / cleanup (`rm -rf node_modules`,
+    `git reset --hard`, `--force`)
+  - 📂 **dir-change** — `cd` elsewhere, or git activity in a different repo
+  - 🔀 **branch-switch** — reflog `checkout: moving from … to …`
+
+Consecutive detours of the *same* kind nest **deeper** (the classic
+"…which needed…which needed…" spiral), so the shape of a rabbit hole is visible
+at a glance. Each tree footer reports its total events and how many levels deep
+it went.
+
 ## Why local-first?
 
 Your shell history has tokens, paths, and side projects in it. Cloud "AI standup" tools want you to upload all of that. yak-tracker runs against your local Ollama instance instead. Privacy is the feature.
@@ -81,10 +125,10 @@ Your shell history has tokens, paths, and side projects in it. Cloud "AI standup
 ## Planned usage
 
 ```bash
-yak today                      # render today's yak-shaving tree + summary
-yak today --format standup     # just the shippable bullet points
-yak today --format story       # the rabbit-hole saga
-yak today --format learning    # what you learned today
+yak today                      # render today's yak-shaving tree — available now ✅
+yak today --format standup     # just the shippable bullet points (M5)
+yak today --format story       # the rabbit-hole saga (M5)
+yak today --format learning    # what you learned today (M5)
 yak sessions                   # list time-gapped work sessions — available now ✅
 yak raw                        # dump normalized events (no LLM) — available now ✅
 ```

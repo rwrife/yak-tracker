@@ -10,9 +10,11 @@ from collections.abc import Sequence
 
 from rich.console import Console
 from rich.table import Table
+from rich.tree import Tree as RichTree
 
 from .models import Event
 from .sessionize import Session
+from .tree import DetourKind, Node
 
 
 def events_table(events: Sequence[Event], *, title: str | None = None) -> Table:
@@ -95,3 +97,63 @@ def render_sessions(
         console.print(f"[yellow]{empty_message}[/yellow]")
         return
     console.print(sessions_table(sessions, title=title))
+
+
+# --- yak-shaving tree (M4) -------------------------------------------------
+
+# Per-detour-kind glyph + colour, so a tree reads at a glance: what was a
+# rabbit hole (installs, forced fixes) vs. ordinary steps.
+_KIND_STYLE: dict[str, tuple[str, str]] = {
+    DetourKind.ROOT: ("\N{OX} ", "bold white"),
+    DetourKind.STEP: ("\N{BULLET} ", "dim"),
+    DetourKind.INSTALL: ("\N{PACKAGE} ", "yellow"),
+    DetourKind.ERROR_FIX: ("\N{FIRE} ", "red"),
+    DetourKind.DIR_CHANGE: ("\N{OPEN FILE FOLDER} ", "blue"),
+    DetourKind.BRANCH: ("\N{TWISTED RIGHTWARDS ARROWS} ", "magenta"),
+}
+
+
+def _node_text(node: Node) -> str:
+    """Markup string for a single tree node: glyph + styled label + time."""
+    glyph, style = _KIND_STYLE.get(node.kind, ("\N{BULLET} ", "white"))
+    when = f" [dim]({node.ts.strftime('%H:%M')})[/dim]" if node.ts else ""
+    label = node.label.replace("[", "\\[")  # escape rich markup in raw commands
+    return f"{glyph}[{style}]{label}[/{style}]{when}"
+
+
+def _attach(branch: RichTree, node: Node) -> None:
+    """Recursively attach ``node``'s children to a rich tree ``branch``."""
+    for child in node.children:
+        sub = branch.add(_node_text(child))
+        _attach(sub, child)
+
+
+def tree_view(node: Node, *, index: int | None = None) -> RichTree:
+    """Build a rich ``Tree`` for one yak-shaving ``Node`` (a session)."""
+    prefix = f"[dim]#{index}[/dim] " if index is not None else ""
+    root = RichTree(prefix + _node_text(node), guide_style="grey39")
+    _attach(root, node)
+    return root
+
+
+def render_trees(
+    forest: Sequence[Node],
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No sessions to shave.",
+) -> None:
+    """Print one yak-shaving tree per session, or a friendly empty note."""
+    console = console or Console()
+    if not forest:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+    if title:
+        console.print(f"[bold]{title}[/bold]")
+    for i, node in enumerate(forest, start=1):
+        console.print(tree_view(node, index=i))
+        detours = node.descendants()
+        depth = node.max_depth()
+        console.print(
+            f"  [dim]{detours} event(s), {depth} level(s) deep[/dim]\n"
+        )
