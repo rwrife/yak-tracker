@@ -1,0 +1,17 @@
+# zsh extended history fixture for the M4 yak-shaving tree.
+# Format: ": <start-epoch>:<elapsed>;<command>"
+# All entries cluster within a few minutes of epoch 1750150000 so they form a
+# single session on one local day. Tests derive the date from the epoch, so
+# this stays timezone-safe.
+#
+# The sequence tells a tiny yak-shaving story: start on a login fix, fall into a
+# dependency rabbit hole (install → wipe → reinstall), then hop to a sibling
+# project. Each line is chosen to trip a specific detour classifier.
+: 1750150000:0;git checkout -b fix-login
+: 1750150030:1;vim src/login.py
+: 1750150060:3;npm test
+: 1750150090:5;npm install left-pad
+: 1750150120:1;rm -rf node_modules
+: 1750150150:8;npm install
+: 1750150200:2;cd ../shared-utils
+: 1750150240:6;cargo build

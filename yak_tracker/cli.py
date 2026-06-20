@@ -17,8 +17,9 @@ from rich.console import Console
 from . import __version__
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
-from .render import render_events, render_sessions
+from .render import render_events, render_sessions, render_trees
 from .sessionize import sessionize
+from .tree import build_forest
 
 app = typer.Typer(
     name="yak",
@@ -122,6 +123,30 @@ def raw(
     )
 
 
+def _collect_day_events(
+    target: date,
+    *,
+    repos: list[Path] | None,
+    shell: str | None,
+    histfile: Path | None,
+    no_git: bool,
+    no_shell: bool,
+) -> list:
+    """Collect a day's shell + git events (shared by ``sessions`` and ``today``)."""
+    collected: list = []
+    if not no_shell:
+        collected += shell_collector.collect_for_date(
+            target,
+            shell=shell,
+            path=histfile,
+        )
+    if not no_git:
+        repo_paths = list(repos) if repos else [Path.cwd()]
+        git_events = git_collector.collect(repo_paths)
+        collected += [e for e in git_events if e.on_date(target)]
+    return collected
+
+
 @app.command()
 def sessions(
     date_str: str = typer.Option(
@@ -173,17 +198,14 @@ def sessions(
     """
     target = _parse_date(date_str)
 
-    collected: list = []
-    if not no_shell:
-        collected += shell_collector.collect_for_date(
-            target,
-            shell=shell,
-            path=histfile,
-        )
-    if not no_git:
-        repo_paths = list(repos) if repos else [Path.cwd()]
-        git_events = git_collector.collect(repo_paths)
-        collected += [e for e in git_events if e.on_date(target)]
+    collected = _collect_day_events(
+        target,
+        repos=repos,
+        shell=shell,
+        histfile=histfile,
+        no_git=no_git,
+        no_shell=no_shell,
+    )
 
     day_sessions = sessionize(collected, idle_gap=idle_gap)
     render_sessions(
@@ -194,6 +216,81 @@ def sessions(
             f"No sessions found for {target.isoformat()}. "
             "(No timestamped shell/git events on that day — check --repo or your "
             "history file's timestamps.)"
+        ),
+    )
+
+
+@app.command()
+def today(
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Day to reconstruct (YYYY-MM-DD). Defaults to today.",
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to the current directory.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        25.0,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session.",
+    ),
+    no_git: bool = typer.Option(
+        False,
+        "--no-git",
+        help="Skip the git collector (shell history only).",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip the shell collector (git activity only).",
+    ),
+) -> None:
+    """Reconstruct the day as yak-shaving trees: intentions and their detours.
+
+    Collects the day's shell + git activity, buckets it into sessions, then for
+    each session infers a root intention and nests the rabbit holes — package
+    installs, forced fixes, directory hops, branch switches — that branched off
+    it. This is the headline view: not *what* landed, but *how the day actually
+    went*.
+    """
+    target = _parse_date(date_str)
+
+    collected = _collect_day_events(
+        target,
+        repos=repos,
+        shell=shell,
+        histfile=histfile,
+        no_git=no_git,
+        no_shell=no_shell,
+    )
+
+    day_sessions = sessionize(collected, idle_gap=idle_gap)
+    forest = build_forest(day_sessions)
+    render_trees(
+        forest,
+        console=console,
+        title=f"🐃 Yak-shaving — {target.isoformat()}",
+        empty_message=(
+            f"Nothing to shave for {target.isoformat()}. "
+            "(No timestamped shell/git events — check --repo or your history "
+            "file's timestamps.)"
         ),
     )
 
