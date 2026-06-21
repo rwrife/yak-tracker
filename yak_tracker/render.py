@@ -9,12 +9,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree as RichTree
 
 from .models import Event
+from .narrate import Narration
 from .sessionize import Session
 from .tree import DetourKind, Node
+
+# Per-persona panel framing for narrated output (title + border colour).
+_FORMAT_STYLE: dict[str, tuple[str, str]] = {
+    "standup": ("\N{MEMO} Standup", "green"),
+    "story": ("\N{OX} Yak-shaving story", "magenta"),
+    "learning": ("\N{ELECTRIC LIGHT BULB} What I learned", "yellow"),
+}
 
 
 def events_table(events: Sequence[Event], *, title: str | None = None) -> Table:
@@ -157,3 +166,34 @@ def render_trees(
         console.print(
             f"  [dim]{detours} event(s), {depth} level(s) deep[/dim]\n"
         )
+
+
+# --- narration (M5) --------------------------------------------------------
+
+
+def render_narration(
+    narration: Narration,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+) -> None:
+    """Print a successful narration in a titled panel.
+
+    Only call this when ``narration.ok`` is True; the CLI handles the fallback
+    (raw tree + notice) for the unavailable case so the empty/offline path stays
+    in one place.
+    """
+    console = console or Console()
+    label, border = _FORMAT_STYLE.get(narration.format, ("Narration", "cyan"))
+    subtitle = f"[dim]{narration.model}[/dim]"
+    body = (narration.text or "").strip()
+    panel = Panel(
+        body,
+        title=f"[bold]{label}[/bold]",
+        subtitle=subtitle,
+        border_style=border,
+        padding=(1, 2),
+    )
+    if title:
+        console.print(f"[bold]{title}[/bold]")
+    console.print(panel)
