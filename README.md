@@ -11,15 +11,18 @@ Three outputs from the same data:
 
 ## Status
 
-🚧 Early — building toward v0.1. Working today: the CLI scaffold (M1) and the
+🚧 Early — building toward v0.1. Working today: the CLI scaffold (M1), the
 **shell-history collector (M2)** — `yak raw` parses your bash/zsh history into
-normalized events. Sessionizer, yak-shaving tree, and Ollama narration land
-next. See [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
+normalized events — and the **git collector + sessionizer (M3)** — `yak
+sessions` interleaves git commits/reflog with shell history and buckets it into
+time-gapped work sessions. Yak-shaving tree and Ollama narration land next. See
+[`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
 yak --version   # 🐃 it's alive
 yak hello       # placeholder until `yak today` lands
 yak raw         # parse today's shell history into a table
+yak sessions    # group today's shell + git activity into work sessions
 ```
 
 ## `yak raw` — shell history collector
@@ -45,6 +48,32 @@ Plain bash history has no timestamps, so date-filtering can't apply — use
 together, and the collector degrades gracefully (prints a friendly note) when no
 history file is found.
 
+## `yak sessions` — git collector + sessionizer
+
+`yak sessions` merges your shell history with **git activity** (commits +
+reflog: branch switches, checkouts, resets) across one or more repos, then
+splits the combined timeline into **work sessions** wherever there's a long idle
+gap. It's the first glimpse of the day's shape — when you were heads-down vs.
+when you stepped away.
+
+```bash
+yak sessions                         # today, current repo + shell history
+yak sessions --repo ~/code/app -r ~/code/lib   # include several repos
+yak sessions --date 2026-06-17       # a specific day (YYYY-MM-DD)
+yak sessions --idle-gap 15           # split on 15-min gaps (default 25)
+yak sessions --no-git                # shell history only
+yak sessions --no-shell              # git activity only
+```
+
+Each row shows a session's start/end, duration, event count, and which sources
+fed it (e.g. `shell:zsh`, `git:app`). Only **timestamped** events can be placed
+on the timeline — undated commands (plain bash history) are shown by `yak raw`
+but skipped here. Non-repo paths and missing history degrade gracefully to an
+empty result rather than erroring.
+
+A session boundary is any gap **strictly greater** than `--idle-gap` minutes
+between consecutive events (default 25). Repos default to the current directory.
+
 ## Why local-first?
 
 Your shell history has tokens, paths, and side projects in it. Cloud "AI standup" tools want you to upload all of that. yak-tracker runs against your local Ollama instance instead. Privacy is the feature.
@@ -56,7 +85,7 @@ yak today                      # render today's yak-shaving tree + summary
 yak today --format standup     # just the shippable bullet points
 yak today --format story       # the rabbit-hole saga
 yak today --format learning    # what you learned today
-yak sessions                   # list time-gapped work sessions
+yak sessions                   # list time-gapped work sessions — available now ✅
 yak raw                        # dump normalized events (no LLM) — available now ✅
 ```
 
