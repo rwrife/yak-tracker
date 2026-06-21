@@ -1,0 +1,13 @@
+# zsh extended history fixture.
+# Format: ": <start-epoch>:<elapsed>;<command>"
+# Epoch 1750118400 and the four following entries fall on one local day;
+# entry 1750204800 is the next day. Tests derive expected dates from these
+# epochs (see DAY1/DAY2 in test_shell_collector.py) so they are timezone-safe.
+: 1750118400:0;cd ~/projects/login
+: 1750118412:2;git status
+: 1750118500:0;npm install
+: 1750118530:15;npm run build
+: 1750118600:0;for f in *.py; do \
+echo "$f"; \
+done
+: 1750204800:0;git commit -m "next day"

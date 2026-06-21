@@ -11,14 +11,39 @@ Three outputs from the same data:
 
 ## Status
 
-🚧 Early — building toward v0.1. The CLI scaffold (M1) works today; collectors,
-sessionizer, and Ollama narration land next. See [`PLAN.md`](./PLAN.md) for the
-roadmap and milestones.
+🚧 Early — building toward v0.1. Working today: the CLI scaffold (M1) and the
+**shell-history collector (M2)** — `yak raw` parses your bash/zsh history into
+normalized events. Sessionizer, yak-shaving tree, and Ollama narration land
+next. See [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
 yak --version   # 🐃 it's alive
 yak hello       # placeholder until `yak today` lands
+yak raw         # parse today's shell history into a table
 ```
+
+## `yak raw` — shell history collector
+
+`yak raw` reads your shell history (bash or zsh), normalizes each command into a
+timestamped event, and prints today's activity as a table:
+
+```bash
+yak raw                          # today's events, auto-detecting your shell
+yak raw --date 2026-06-17        # a specific day (YYYY-MM-DD)
+yak raw --shell zsh              # force the history grammar
+yak raw --histfile ~/.bash_history   # parse a specific file
+yak raw --include-undated        # also show commands with no timestamp
+```
+
+Timestamps appear when the history format records them:
+
+- **zsh** with `setopt EXTENDED_HISTORY` (the `: <epoch>:<elapsed>;cmd` format).
+- **bash** with `HISTTIMEFORMAT` set (bash writes `#<epoch>` lines).
+
+Plain bash history has no timestamps, so date-filtering can't apply — use
+`--include-undated` to dump everything. Multi-line commands are stitched back
+together, and the collector degrades gracefully (prints a friendly note) when no
+history file is found.
 
 ## Why local-first?
 
@@ -32,7 +57,7 @@ yak today --format standup     # just the shippable bullet points
 yak today --format story       # the rabbit-hole saga
 yak today --format learning    # what you learned today
 yak sessions                   # list time-gapped work sessions
-yak raw                        # dump normalized events (no LLM)
+yak raw                        # dump normalized events (no LLM) — available now ✅
 ```
 
 ## Requirements (planned)
