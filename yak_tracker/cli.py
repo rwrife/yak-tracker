@@ -13,11 +13,19 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from . import __version__
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
-from .render import render_events, render_sessions, render_trees
+from .config import VALID_FORMATS, load_config
+from .narrate import narrate as narrate_forest
+from .render import (
+    render_events,
+    render_narration,
+    render_sessions,
+    render_trees,
+)
 from .sessionize import sessionize
 from .tree import build_forest
 
@@ -228,11 +236,21 @@ def today(
         "-d",
         help="Day to reconstruct (YYYY-MM-DD). Defaults to today.",
     ),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help=(
+            "Narration persona: standup, story, or learning. "
+            "Defaults to the configured format (story). "
+            "Requires a local Ollama; falls back to the raw tree if absent."
+        ),
+    ),
     repos: list[Path] = typer.Option(
         None,
         "--repo",
         "-r",
-        help="Git repo to include (repeatable). Defaults to the current directory.",
+        help="Git repo to include (repeatable). Defaults to config or the current directory.",
     ),
     shell: str = typer.Option(
         None,
@@ -246,10 +264,25 @@ def today(
         exists=False,
     ),
     idle_gap: float = typer.Option(
-        25.0,
+        None,
         "--idle-gap",
         "-g",
-        help="Minutes of inactivity that start a new session.",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        help="Ollama model to narrate with. Overrides config.",
+    ),
+    ollama_host: str = typer.Option(
+        None,
+        "--ollama-host",
+        help="Base URL of the local Ollama server. Overrides config.",
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Skip Ollama narration; print the raw yak-shaving tree only.",
     ),
     no_git: bool = typer.Option(
         False,
@@ -262,37 +295,121 @@ def today(
         help="Skip the shell collector (git activity only).",
     ),
 ) -> None:
-    """Reconstruct the day as yak-shaving trees: intentions and their detours.
+    """Reconstruct the day and narrate it with a local LLM.
 
-    Collects the day's shell + git activity, buckets it into sessions, then for
-    each session infers a root intention and nests the rabbit holes — package
-    installs, forced fixes, directory hops, branch switches — that branched off
-    it. This is the headline view: not *what* landed, but *how the day actually
-    went*.
+    Collects the day's shell + git activity, buckets it into sessions, builds the
+    yak-shaving trees, then asks a local Ollama model to narrate them in the
+    chosen ``--format`` persona:
+
+    * ``standup`` — terse, shippable bullets for the morning sync.
+    * ``story``   — the funny saga of the day's rabbit holes (default).
+    * ``learning``— what you learned, to fight AI-coding skill rot.
+
+    Privacy is the point: only a summarised outline is sent, and only to your
+    local Ollama. If Ollama isn't reachable (or ``--no-llm`` is set), it degrades
+    gracefully to the raw tree render plus a short notice — so you always get
+    *something*.
     """
     target = _parse_date(date_str)
 
+    if fmt is not None and fmt not in VALID_FORMATS:
+        raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        model=model,
+        ollama_host=ollama_host,
+        format=fmt,
+    )
+
     collected = _collect_day_events(
         target,
-        repos=repos,
+        repos=list(config.repos) if config.repos else None,
         shell=shell,
         histfile=histfile,
         no_git=no_git,
         no_shell=no_shell,
     )
 
-    day_sessions = sessionize(collected, idle_gap=idle_gap)
+    day_sessions = sessionize(collected, idle_gap=config.idle_gap)
     forest = build_forest(day_sessions)
-    render_trees(
-        forest,
-        console=console,
-        title=f"🐃 Yak-shaving — {target.isoformat()}",
-        empty_message=(
-            f"Nothing to shave for {target.isoformat()}. "
-            "(No timestamped shell/git events — check --repo or your history "
-            "file's timestamps.)"
-        ),
+
+    tree_title = f"\N{OX} Yak-shaving — {target.isoformat()}"
+    empty_message = (
+        f"Nothing to shave for {target.isoformat()}. "
+        "(No timestamped shell/git events — check --repo or your history "
+        "file's timestamps.)"
     )
+
+    # No data, or narration explicitly skipped → just the raw tree (no network).
+    if not forest or no_llm:
+        render_trees(
+            forest, console=console, title=tree_title, empty_message=empty_message
+        )
+        return
+
+    narration = narrate_forest(
+        forest,
+        fmt=config.format,
+        model=config.model,
+        host=config.ollama_host,
+        timeout=config.timeout,
+        date_label=target.isoformat(),
+    )
+
+    if narration.ok:
+        render_narration(narration, console=console, title=tree_title)
+    else:
+        # Graceful fallback: explain why narration was skipped, then the raw tree.
+        if narration.notice:
+            console.print(f"[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]\n")
+        render_trees(
+            forest, console=console, title=tree_title, empty_message=empty_message
+        )
+
+
+@app.command(name="config")
+def config_cmd(
+    show_path: bool = typer.Option(
+        False,
+        "--path",
+        help="Print only the resolved config file path and exit.",
+    ),
+) -> None:
+    """Print the resolved configuration (and where it came from).
+
+    Shows the effective settings yak-tracker would use — repos, idle gap, Ollama
+    model/host, default format — merged from the config file
+    (``~/.config/yak-tracker/config.toml`` by default) over the built-in
+    defaults. Problems loading the file are reported as warnings rather than
+    failing, so this doubles as a config linter.
+    """
+    cfg = load_config()
+
+    if show_path:
+        console.print(str(cfg.path))
+        return
+
+    table = Table(title="yak-tracker config", expand=True, highlight=True)
+    table.add_column("Setting", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white", overflow="fold")
+    repos_display = (
+        "\n".join(str(p) for p in cfg.repos) if cfg.repos else "[dim](current dir)[/dim]"
+    )
+    table.add_row("repos", repos_display)
+    table.add_row("idle_gap", f"{cfg.idle_gap:g} min")
+    table.add_row("model", cfg.model)
+    table.add_row("ollama_host", cfg.ollama_host)
+    table.add_row("timeout", f"{cfg.timeout:g} s")
+    table.add_row("format", cfg.format)
+    table.add_row("config file", str(cfg.path))
+    console.print(table)
+    console.print(f"[dim]source: {cfg.source}[/dim]")
+    if cfg.warnings:
+        console.print("\n[yellow]Warnings:[/yellow]")
+        for warning in cfg.warnings:
+            console.print(f"  [yellow]\N{WARNING SIGN}  {warning}[/yellow]")
 
 
 if __name__ == "__main__":  # pragma: no cover
