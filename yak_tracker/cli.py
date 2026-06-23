@@ -8,7 +8,8 @@ scaffold easy to test and fast to start.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import json
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -26,6 +27,7 @@ from .render import (
     render_sessions,
     render_trees,
 )
+from .serialize import forest_to_dict
 from .sessionize import sessionize
 from .tree import build_forest
 
@@ -79,6 +81,18 @@ def _parse_date(value: str | None) -> date:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise typer.BadParameter("date must be in YYYY-MM-DD format") from exc
+
+
+def _date_range(end: date, since: int | None) -> list[date]:
+    """Inclusive list of dates ending at ``end``, spanning ``since`` days.
+
+    ``--since 1`` (or ``None``) yields just ``end``; ``--since 7`` yields the
+    week ending on ``end`` (7 days, oldest first).
+    """
+    span = 1 if since is None else since
+    if span < 1:
+        raise typer.BadParameter("--since must be a positive number of days")
+    return [end - timedelta(days=offset) for offset in range(span - 1, -1, -1)]
 
 
 @app.command()
@@ -263,6 +277,16 @@ def today(
         help="Parse this history file instead of the auto-located one.",
         exists=False,
     ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help=(
+            "Reconstruct the last N days ending at --date (default today), "
+            "oldest first. --since 1 is the same as a single day."
+        ),
+    ),
     idle_gap: float = typer.Option(
         None,
         "--idle-gap",
@@ -278,6 +302,14 @@ def today(
         None,
         "--ollama-host",
         help="Base URL of the local Ollama server. Overrides config.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit the yak-shaving forest as JSON for scripting (implies "
+            "--no-llm; narration is prose, not data)."
+        ),
     ),
     no_llm: bool = typer.Option(
         False,
@@ -309,11 +341,17 @@ def today(
     local Ollama. If Ollama isn't reachable (or ``--no-llm`` is set), it degrades
     gracefully to the raw tree render plus a short notice — so you always get
     *something*.
-    """
-    target = _parse_date(date_str)
 
+    Use ``--since N`` to reconstruct the last N days at once (oldest first), and
+    ``--json`` to emit the yak-shaving forest as machine-readable JSON for
+    scripting or export (``--json`` implies ``--no-llm``; with ``--since`` it
+    emits a JSON array, one document per day).
+    """
     if fmt is not None and fmt not in VALID_FORMATS:
         raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    end = _parse_date(date_str)
+    days = _date_range(end, since)
 
     config = load_config().with_overrides(
         idle_gap=idle_gap,
@@ -323,50 +361,60 @@ def today(
         format=fmt,
     )
 
-    collected = _collect_day_events(
-        target,
-        repos=list(config.repos) if config.repos else None,
-        shell=shell,
-        histfile=histfile,
-        no_git=no_git,
-        no_shell=no_shell,
-    )
-
-    day_sessions = sessionize(collected, idle_gap=config.idle_gap)
-    forest = build_forest(day_sessions)
-
-    tree_title = f"\N{OX} Yak-shaving — {target.isoformat()}"
-    empty_message = (
-        f"Nothing to shave for {target.isoformat()}. "
-        "(No timestamped shell/git events — check --repo or your history "
-        "file's timestamps.)"
-    )
-
-    # No data, or narration explicitly skipped → just the raw tree (no network).
-    if not forest or no_llm:
-        render_trees(
-            forest, console=console, title=tree_title, empty_message=empty_message
+    def _forest_for(day: date) -> list:
+        collected = _collect_day_events(
+            day,
+            repos=list(config.repos) if config.repos else None,
+            shell=shell,
+            histfile=histfile,
+            no_git=no_git,
+            no_shell=no_shell,
         )
+        day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+        return build_forest(day_sessions)
+
+    # --json is a data surface: emit every day's forest and skip narration
+    # entirely (narration is prose, not machine-readable).
+    if as_json:
+        documents = [forest_to_dict(_forest_for(day), day=day) for day in days]
+        payload = documents[0] if len(documents) == 1 else documents
+        console.print_json(json.dumps(payload, ensure_ascii=False))
         return
 
-    narration = narrate_forest(
-        forest,
-        fmt=config.format,
-        model=config.model,
-        host=config.ollama_host,
-        timeout=config.timeout,
-        date_label=target.isoformat(),
-    )
-
-    if narration.ok:
-        render_narration(narration, console=console, title=tree_title)
-    else:
-        # Graceful fallback: explain why narration was skipped, then the raw tree.
-        if narration.notice:
-            console.print(f"[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]\n")
-        render_trees(
-            forest, console=console, title=tree_title, empty_message=empty_message
+    for day in days:
+        forest = _forest_for(day)
+        tree_title = f"\N{OX} Yak-shaving — {day.isoformat()}"
+        empty_message = (
+            f"Nothing to shave for {day.isoformat()}. "
+            "(No timestamped shell/git events — check --repo or your history "
+            "file's timestamps.)"
         )
+
+        # No data, or narration explicitly skipped → just the raw tree (no network).
+        if not forest or no_llm:
+            render_trees(
+                forest, console=console, title=tree_title, empty_message=empty_message
+            )
+            continue
+
+        narration = narrate_forest(
+            forest,
+            fmt=config.format,
+            model=config.model,
+            host=config.ollama_host,
+            timeout=config.timeout,
+            date_label=day.isoformat(),
+        )
+
+        if narration.ok:
+            render_narration(narration, console=console, title=tree_title)
+        else:
+            # Graceful fallback: explain why narration was skipped, then raw tree.
+            if narration.notice:
+                console.print(f"[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]\n")
+            render_trees(
+                forest, console=console, title=tree_title, empty_message=empty_message
+            )
 
 
 @app.command(name="config")

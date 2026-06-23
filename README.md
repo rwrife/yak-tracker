@@ -19,12 +19,15 @@ time-gapped work sessions — the **yak-shaving tree (M4)** — `yak today`
 reconstructs each session as an intention with its rabbit holes nested beneath
 it — and **Ollama narration (M5)** — `yak today --format standup|story|learning`
 narrates the tree with your local LLM, with a config file and graceful offline
-fallback. See [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
+fallback. **Packaging polish (M6)** is underway — `yak today --json` for
+scripting and `--since N` for multi-day rollups have landed. See
+[`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
 yak --version   # 🐃 it's alive
 yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
+yak today --json            # machine-readable forest (for scripting)
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 yak config      # show the resolved configuration
@@ -96,6 +99,8 @@ yak today --no-llm                # skip Ollama; print the raw tree only
 yak today --model mistral         # pick the Ollama model (overrides config)
 yak today --ollama-host http://box:11434   # point at a remote Ollama
 yak today --date 2026-06-17       # a specific day (YYYY-MM-DD)
+yak today --since 7               # the last 7 days, oldest first
+yak today --json                  # machine-readable forest (for scripting)
 yak today --repo ~/code/app -r ~/code/lib  # include several repos
 yak today --idle-gap 15           # split sessions on 15-min gaps (default 25)
 yak today --no-git                # shell history only
@@ -131,6 +136,30 @@ Consecutive detours of the *same* kind nest **deeper** (the classic
 "…which needed…which needed…" spiral), so the shape of a rabbit hole is visible
 at a glance. (`--no-llm` shows this tree directly, with a per-session footer of
 total events and depth.)
+
+### Scripting: `--json` and `--since`
+
+For automation, export, or piping into a notes vault, `--json` emits the
+yak-shaving forest as machine-readable JSON instead of the rich render (it
+implies `--no-llm` — narration is prose, not data):
+
+```bash
+yak today --json                       # today's forest as JSON
+yak today --json --date 2026-06-17     # a specific day
+yak today --json --since 7             # last 7 days → a JSON array (one per day)
+yak today --json | jq '.summary'       # pipe straight into jq
+```
+
+Each document is self-describing — a `schema` version, the `date` it covers, a
+`generated_at` UTC stamp, a rollup `summary` (`sessions`/`events`/`max_depth`),
+and a `sessions` array. Every session carries its inferred `intention`, quick
+stats, and the full nested `tree`; detour `kind`s are the stable strings
+`root` / `step` / `install` / `error-fix` / `dir-change` / `branch-switch`, so
+consumers can switch on them. A single day prints one object; `--since N` prints
+an array of N day-documents (oldest first).
+
+`--since N` also works for the human render — it reconstructs the last N days in
+sequence, so `yak today --since 7` walks your whole week of rabbit holes.
 
 ## `yak config` — settings & defaults
 
@@ -186,8 +215,16 @@ yak config                     # show resolved configuration — available now �
 
 > Requires Python 3.11+. [`uv`](https://docs.astral.sh/uv/) is recommended but optional.
 
+The quickest way to get the `yak` command on your PATH is [pipx](https://pipx.pypa.io):
+
 ```bash
-# from a clone
+pipx install git+https://github.com/rwrife/yak-tracker
+yak --version
+```
+
+Or run straight from a clone with `uv` (no install step):
+
+```bash
 git clone https://github.com/rwrife/yak-tracker
 cd yak-tracker
 uv run yak --version
