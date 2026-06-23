@@ -17,6 +17,7 @@ from .models import Event
 from .narrate import Narration
 from .sessionize import Session
 from .tree import DetourKind, Node
+from .week import HEAT_LEVELS, WeekSummary, heat_level
 
 # Per-persona panel framing for narrated output (title + border colour).
 _FORMAT_STYLE: dict[str, tuple[str, str]] = {
@@ -165,6 +166,110 @@ def render_trees(
         depth = node.max_depth()
         console.print(
             f"  [dim]{detours} event(s), {depth} level(s) deep[/dim]\n"
+        )
+
+
+# --- weekly heatmap (yak week) ---------------------------------------------
+
+# Cold → hot ramp for the per-day tangent-depth heatmap. Index with
+# ``week.heat_level(...)`` (0 == calm/no-nesting, last == deepest day of week).
+_HEAT_STYLE: tuple[str, ...] = (
+    "grey39",  # 0 — no tangents that day
+    "cyan",  # 1
+    "green",  # 2
+    "yellow",  # 3
+    "red",  # 4 — deepest day of the week
+)
+
+# Solid block used to draw each day's heat cell; width scales with depth bucket.
+_HEAT_BLOCK = "\N{FULL BLOCK}"
+
+
+def _heat_cells(level: int, *, levels: int = HEAT_LEVELS, lit: bool = True) -> str:
+    """A little bar of blocks (``level+1`` wide) in the bucket's colour.
+
+    When ``lit`` is False the whole bar is drawn dark (used for quiet days with
+    no sessions at all, so they read as visually empty rather than level-0 warm).
+    """
+    if not lit:
+        return "[grey23]" + _HEAT_BLOCK * levels + "[/grey23]"
+    style = _HEAT_STYLE[min(level, len(_HEAT_STYLE) - 1)]
+    filled = _HEAT_BLOCK * (level + 1)
+    empty = "[grey23]" + _HEAT_BLOCK * (levels - level - 1) + "[/grey23]"
+    return f"[{style}]{filled}[/{style}]{empty}"
+
+
+def week_table(week: WeekSummary, *, title: str | None = None) -> Table:
+    """Build the per-day tangent-depth heatmap table for ``yak week``."""
+    table = Table(title=title, expand=True, highlight=True)
+    table.add_column("Day", style="cyan", no_wrap=True)
+    table.add_column("Date", style="dim", no_wrap=True)
+    table.add_column("Depth", style="white", no_wrap=True, justify="center")
+    table.add_column("", no_wrap=True)  # heat bar
+    table.add_column("Sessions", style="green", no_wrap=True, justify="right")
+    table.add_column("Detours", style="yellow", no_wrap=True, justify="right")
+    table.add_column("Deepest shave", style="white", overflow="fold")
+
+    for d in week.days:
+        level = heat_level(d.max_depth, week.peak_depth)
+        is_peak = (
+            week.deepest_day is not None
+            and d.day == week.deepest_day.day
+            and d.max_depth > 0
+        )
+        if d.is_empty:
+            depth_cell = "[grey39]—[/grey39]"
+            deepest = "[grey39](quiet day)[/grey39]"
+        else:
+            depth_cell = str(d.max_depth)
+            label = (d.deepest_label or "").replace("[", "\\[")
+            deepest = f"[bold red]◆[/bold red] {label}" if is_peak else label
+        table.add_row(
+            d.day.strftime("%a"),
+            d.day.isoformat(),
+            depth_cell,
+            _heat_cells(level, lit=not d.is_empty),
+            "—" if d.is_empty else str(d.sessions),
+            "—" if d.is_empty else str(d.events),
+            deepest,
+        )
+    return table
+
+
+def render_week(
+    week: WeekSummary,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No activity this week.",
+) -> None:
+    """Print the weekly heatmap, a roll-up line, and the deepest shave callout."""
+    console = console or Console()
+    if not week.days:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+
+    console.print(week_table(week, title=title))
+
+    # Roll-up footer: how busy the week was overall.
+    console.print(
+        f"  [dim]{week.active_days}/{len(week.days)} active day(s), "
+        f"{week.total_sessions} session(s), {week.total_events} detour(s).[/dim]"
+    )
+
+    # Highlight the single deepest yak-shave of the week.
+    if week.deepest_day is not None and week.peak_depth > 0:
+        dd = week.deepest_day
+        label = (dd.deepest_label or "").replace("[", "\\[")
+        console.print(
+            f"  [bold red]\N{FIRE} Deepest shave:[/bold red] "
+            f"[white]{label}[/white] "
+            f"[dim]— {week.peak_depth} level(s) deep on "
+            f"{dd.day.strftime('%a %Y-%m-%d')}.[/dim]"
+        )
+    else:
+        console.print(
+            "  [dim]No rabbit holes this week — every session stayed flat. \N{SPARKLES}[/dim]"
         )
 
 
