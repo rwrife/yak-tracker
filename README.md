@@ -19,14 +19,16 @@ time-gapped work sessions — the **yak-shaving tree (M4)** — `yak today`
 reconstructs each session as an intention with its rabbit holes nested beneath
 it — and **Ollama narration (M5)** — `yak today --format standup|story|learning`
 narrates the tree with your local LLM, with a config file and graceful offline
-fallback. **Packaging polish (M6)** is underway — `yak today --json` for
-scripting and `--since N` for multi-day rollups have landed. The first v0.2
+fallback. **Packaging polish (M6)** is underway — `yak demo` shows a built-in
+sample day with zero setup, and `yak today --json` for scripting and `--since N`
+for multi-day rollups have landed. The first v0.2
 backlog feature is in too: **`yak week`** rolls a whole week into a tangent-depth
 heatmap. See
 [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
 yak --version   # 🐃 it's alive
+yak demo                  # see a sample day instantly — no setup needed
 yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
@@ -35,6 +37,54 @@ yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 yak config      # show the resolved configuration
 ```
+
+## Try it instantly — `yak demo`
+
+No shell history yet? No Ollama? `yak demo` runs a **built-in sample day**
+through the exact same pipeline as `yak today` — so you can see what yak-tracker
+produces the moment you install it, with zero setup and nothing sent anywhere:
+
+```bash
+pipx install git+https://github.com/rwrife/yak-tracker
+yak demo
+```
+
+The sample is the canonical spiral: you sat down to fix a login bug, fell into
+an `npm` upgrade, which broke the lockfile, which earned a rage-deleted
+`node_modules`, after which you wandered into *another* repo to build some Rust —
+and only then shipped:
+
+```
+🐂 Yak-shaving (demo) — 2026-06-17
+#1 🐂 fix: reject empty password on login (09:02)
+├── • npm test (09:04)
+├── 📦 npm install jsonwebtoken@latest (09:07)
+│   └── 📦 npm install (09:09)
+│       └── • npm dedupe (09:12)
+├── 🔥 rm -rf node_modules (09:18)
+│   └── • rm package-lock.json (09:19)
+├── 📦 npm install (09:24)
+├── 📂 cd ../shared-utils (09:31)
+├── 📦 cargo add serde (09:33)
+│   ├── • cargo build (09:36)
+│   └── • commit 9f8e7d6 chore(utils): add serde derive (09:41)
+└── 📂 cd ../webapp (09:48)
+    ├── • npm test (09:52)
+    └── • commit c4d5e6f test: cover empty-password path (09:55)
+  14 event(s), 3 level(s) deep
+
+#2 🐂 release: cut v0.1.0 (14:19)
+└── 🔀 switched branch main → release-0.1 (14:10)
+    ├── • npm run build (14:12)
+    └── • git tag v0.1.0 (14:22)
+  3 event(s), 2 level(s) deep
+```
+
+Every detour kind shows up — 📦 install, 🔥 error-fix, 📂 dir-change,
+🔀 branch-switch — and same-kind detours nest into the classic
+"…which needed…which needed…" spiral. `yak demo --json` emits the same
+machine-readable forest as `yak today --json`, and `yak demo --since 7` replays
+the day across a week. When you're ready, point `yak today` at your *own* day.
 
 ## `yak raw` — shell history collector
 
@@ -205,7 +255,8 @@ yak config --path   # just print the config file path
 ```
 
 The file lives at `~/.config/yak-tracker/config.toml` by default (override with
-`$YAK_TRACKER_CONFIG`, or it honours `$XDG_CONFIG_HOME`). All keys are optional:
+`$YAK_TRACKER_CONFIG`, or it honours `$XDG_CONFIG_HOME`). All keys are optional;
+a ready-to-copy starting point ships in [`examples/config.toml`](./examples/config.toml):
 
 ```toml
 # ~/.config/yak-tracker/config.toml
@@ -251,6 +302,7 @@ The quickest way to get the `yak` command on your PATH is [pipx](https://pipx.py
 ```bash
 pipx install git+https://github.com/rwrife/yak-tracker
 yak --version
+yak demo        # see a sample day immediately — no history/Ollama needed
 ```
 
 Or run straight from a clone with `uv` (no install step):

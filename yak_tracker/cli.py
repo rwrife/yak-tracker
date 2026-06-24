@@ -28,6 +28,7 @@ from .render import (
     render_trees,
     render_week,
 )
+from .sample import sample_events
 from .serialize import forest_to_dict
 from .sessionize import sessionize
 from .tree import build_forest
@@ -417,6 +418,75 @@ def today(
             render_trees(
                 forest, console=console, title=tree_title, empty_message=empty_message
             )
+
+
+@app.command()
+def demo(
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Pretend the sample day happened on this date (YYYY-MM-DD). Defaults to today.",
+    ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help="Replay the sample day across the last N days, oldest first.",
+    ),
+    idle_gap: float = typer.Option(
+        25.0,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the sample forest as JSON instead of the rich tree.",
+    ),
+) -> None:
+    """Show a built-in sample day — no shell history or Ollama required.
+
+    ``yak demo`` runs a curated, synthetic coding day (the classic
+    "fix one bug → npm rabbit hole → wandered into another repo → finally
+    shipped" spiral) through the *real* pipeline — the same sessionizer and
+    yak-shaving tree that ``yak today`` uses — so you can see what yak-tracker
+    produces the moment you install it, before pointing it at your own history.
+
+    It never reads your shell history and never touches Ollama (the tree speaks
+    for itself), so it works on a totally fresh machine. ``--json`` emits the
+    same machine-readable forest as ``yak today --json``, and ``--since N``
+    replays the sample across N days so the multi-day and ``yak week`` views
+    have something to chew on too.
+    """
+    end = _parse_date(date_str)
+    days = _date_range(end, since)
+
+    def _forest_for(day: date) -> list:
+        events = sample_events(day=day)
+        day_sessions = sessionize(events, idle_gap=idle_gap)
+        return build_forest(day_sessions)
+
+    if as_json:
+        documents = [forest_to_dict(_forest_for(day), day=day) for day in days]
+        payload = documents[0] if len(documents) == 1 else documents
+        console.print_json(json.dumps(payload, ensure_ascii=False))
+        return
+
+    console.print(
+        "[dim]Sample data — no shell history or Ollama used. "
+        "Run [cyan]yak today[/cyan] against your own day for the real thing.[/dim]\n"
+    )
+    for day in days:
+        forest = _forest_for(day)
+        render_trees(
+            forest,
+            console=console,
+            title=f"\N{OX} Yak-shaving (demo) — {day.isoformat()}",
+            empty_message=f"No sample activity for {day.isoformat()}.",
+        )
 
 
 @app.command()
