@@ -20,7 +20,9 @@ reconstructs each session as an intention with its rabbit holes nested beneath
 it — and **Ollama narration (M5)** — `yak today --format standup|story|learning`
 narrates the tree with your local LLM, with a config file and graceful offline
 fallback. **Packaging polish (M6)** is underway — `yak today --json` for
-scripting and `--since N` for multi-day rollups have landed. See
+scripting and `--since N` for multi-day rollups have landed. The first v0.2
+backlog feature is in too: **`yak week`** rolls a whole week into a tangent-depth
+heatmap. See
 [`PLAN.md`](./PLAN.md) for the roadmap and milestones.
 
 ```bash
@@ -28,6 +30,7 @@ yak --version   # 🐃 it's alive
 yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
+yak week                  # a week of rabbit holes as a depth heatmap
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 yak config      # show the resolved configuration
@@ -160,6 +163,34 @@ an array of N day-documents (oldest first).
 
 `--since N` also works for the human render — it reconstructs the last N days in
 sequence, so `yak today --since 7` walks your whole week of rabbit holes.
+
+## `yak week` — weekly tangent heatmap
+
+`yak week` zooms out from a single day to a **week at a glance**: it
+reconstructs each day in the window, then renders a heatmap of how deep that
+day's deepest rabbit hole went — so the heads-down days and the
+spiralled-all-afternoon days are instantly distinguishable. The single deepest
+yak-shave of the whole week is called out underneath.
+
+```bash
+yak week                          # the last 7 days, ending today
+yak week --since 14               # a two-week window instead
+yak week --date 2026-06-17        # the 7 days ending on a specific date
+yak week --repo ~/code/app -r ~/code/lib   # include several repos
+yak week --no-git                 # shell history only
+yak week --idle-gap 15            # split sessions on 15-min gaps (default 25)
+```
+
+Each row is one day, oldest first, with its **tangent depth** (the deepest
+single-session chain that day), a colour-ramped heat bar (cold grey → hot red
+for the week's worst day), session/detour counts, and the intention behind that
+day's deepest shave. Quiet days with no timestamped activity still appear as
+empty rows, so the gaps are visible too.
+
+`yak week` is the multi-day companion to `yak today`: it shares the exact same
+local-only collection and sessionizing engine, but skips Ollama narration — the
+week view is about *shape*, not prose. The window defaults to 7 days; `--since
+N` overrides the span (e.g. `--since 30` for a month).
 
 ## `yak config` — settings & defaults
 

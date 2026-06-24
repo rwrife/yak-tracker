@@ -26,10 +26,12 @@ from .render import (
     render_narration,
     render_sessions,
     render_trees,
+    render_week,
 )
 from .serialize import forest_to_dict
 from .sessionize import sessionize
 from .tree import build_forest
+from .week import DEFAULT_WEEK_DAYS, build_week
 
 app = typer.Typer(
     name="yak",
@@ -415,6 +417,99 @@ def today(
             render_trees(
                 forest, console=console, title=tree_title, empty_message=empty_message
             )
+
+
+@app.command()
+def week(
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Last day of the window (YYYY-MM-DD). Defaults to today.",
+    ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help=(
+            "Number of days to roll up, ending at --date (default today). "
+            f"Defaults to {DEFAULT_WEEK_DAYS} (a week)."
+        ),
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to config or the current directory.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        None,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    no_git: bool = typer.Option(
+        False,
+        "--no-git",
+        help="Skip the git collector (shell history only).",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip the shell collector (git activity only).",
+    ),
+) -> None:
+    """Roll up a week into a per-day tangent-depth heatmap.
+
+    Reconstructs each day in the window (``--since N`` days back from ``--date``,
+    defaulting to the last 7), then renders a heatmap of how deep that day's
+    deepest rabbit hole went — so the rabbit-hole days jump out at a glance. The
+    single deepest yak-shave of the whole week is called out underneath.
+
+    This is the multi-day companion to ``yak today``: same local-only collection
+    and sessionizing, no Ollama narration (the week view is about *shape*, not
+    prose). Quiet days with no timestamped activity still appear as empty rows so
+    you can see the gaps.
+    """
+    end = _parse_date(date_str)
+    span = DEFAULT_WEEK_DAYS if since is None else since
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+    )
+
+    def _forest_for(day: date) -> list:
+        collected = _collect_day_events(
+            day,
+            repos=list(config.repos) if config.repos else None,
+            shell=shell,
+            histfile=histfile,
+            no_git=no_git,
+            no_shell=no_shell,
+        )
+        day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+        return build_forest(day_sessions)
+
+    summary = build_week(end, span, _forest_for)
+    title = (
+        f"\N{OX} Weekly yak-shaving — "
+        f"{summary.start.isoformat()} → {summary.end.isoformat()} "
+        f"({span}d)"
+    )
+    render_week(summary, console=console, title=title)
 
 
 @app.command(name="config")
