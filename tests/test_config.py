@@ -145,3 +145,36 @@ def test_xdg_config_home_used(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     expected = tmp_path / "yak-tracker" / "config.toml"
     assert default_config_path() == expected
+
+
+# --- redact setting (issue #8) -------------------------------------------
+
+
+def test_redact_defaults_to_true(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "nope.toml")
+    assert cfg.redact is True
+    assert DEFAULTS["redact"] is True
+
+
+def test_redact_can_be_disabled_in_file(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("redact = false\n")
+    cfg = load_config(cfg_file)
+    assert cfg.redact is False
+    assert cfg.warnings == ()
+
+
+def test_redact_non_bool_is_ignored_with_warning(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('redact = "yes"\n')
+    cfg = load_config(cfg_file)
+    # Falls back to the default and records a warning rather than crashing.
+    assert cfg.redact is True
+    assert any("redact" in w for w in cfg.warnings)
+
+
+def test_with_overrides_can_force_redact_off() -> None:
+    base = Config()  # redact defaults True
+    assert base.with_overrides(redact=False).redact is False
+    # None means "no override" so the file/default value is kept.
+    assert base.with_overrides(redact=None).redact is True

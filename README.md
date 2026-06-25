@@ -97,7 +97,16 @@ yak raw --date 2026-06-17        # a specific day (YYYY-MM-DD)
 yak raw --shell zsh              # force the history grammar
 yak raw --histfile ~/.bash_history   # parse a specific file
 yak raw --include-undated        # also show commands with no timestamp
+yak raw --no-redact              # show raw commands without scrubbing secrets
 ```
+
+**Secrets are scrubbed by default.** Before any command is shown (or later fed
+to the LLM / `--json` export), yak-tracker runs a redaction pass that replaces
+API keys, tokens, `KEY=value` credentials, `Authorization:` headers, and
+`user:password@` URLs with a `«REDACTED:…»` tag — keeping the command's *shape*
+so the story still reads, but never the secret. Pass `--no-redact` (or set
+`redact = false` in config) only when you explicitly want the raw text. See
+[Redaction](#redaction--secrets-never-leave-the-box) below.
 
 Timestamps appear when the history format records them:
 
@@ -266,6 +275,7 @@ model       = "llama3"                 # Ollama model for narration
 ollama_host = "http://localhost:11434" # where Ollama lives
 timeout     = 60                       # seconds before falling back
 format      = "story"                  # default `yak today` persona
+redact      = true                     # scrub secrets before they leave the box
 ```
 
 CLI flags always win over the file (e.g. `--idle-gap 15` overrides `idle_gap`).
@@ -273,6 +283,29 @@ CLI flags always win over the file (e.g. `--idle-gap 15` overrides `idle_gap`).
 ## Why local-first?
 
 Your shell history has tokens, paths, and side projects in it. Cloud "AI standup" tools want you to upload all of that. yak-tracker runs against your local Ollama instance instead. Privacy is the feature.
+
+### Redaction — secrets never leave the box
+
+"Local" still includes the prompt handed to Ollama, the `--json` you might drop
+into a notes vault, and the `yak raw` table you might paste into a bug report. So
+**every collected command is run through a redaction pass before any of that**,
+replacing the secret-looking bits with a `«REDACTED:<rule>»` tag while preserving
+the surrounding structure (the variable name, the `Bearer` prefix, the URL host)
+so the narrated story still makes sense.
+
+What gets caught, out of the box:
+
+- **Provider tokens** — AWS access keys (`AKIA…`), GitHub (`ghp_…`), Slack
+  (`xoxb-…`), Google (`AIza…`), OpenAI (`sk-…`), Stripe (`sk_live_…`), JWTs.
+- **Credentials in assignments** — `export FOO_TOKEN=…`, `--password …`,
+  `API_KEY=…` and friends (any sensitively-named variable or flag).
+- **HTTP auth** — `Authorization: Bearer/Basic/Token …` header values.
+- **URL credentials** — the `user:password@host` form.
+- **Generic high-entropy blobs** — long random token-ish strings as a last resort.
+
+It's **on by default** and conservative-by-design (it would rather redact a bit
+too much than leak). Turn it off per-run with `--no-redact`, or globally with
+`redact = false` in your config — you have to opt *out*, never in.
 
 ## Planned usage
 
