@@ -1,0 +1,31 @@
+# yak-tracker — sample configuration
+#
+# Copy this to ~/.config/yak-tracker/config.toml (or set $YAK_TRACKER_CONFIG to
+# point here) and tweak. Every key is optional; anything you omit falls back to
+# the built-in default. CLI flags always win over this file.
+#
+# Check what's actually in effect with:  yak config
+
+# Repos to scan for git activity. ~ is expanded. Defaults to the current
+# directory when unset, so set this once and skip --repo every time.
+repos = ["~/code/yak-tracker", "~/code/other-project"]
+
+# Minutes of inactivity that start a new work session (the gap that means
+# "I stepped away / context-switched"). Default: 25.
+idle_gap = 25
+
+# Ollama model used to narrate `yak today`. Must be pulled locally
+# (e.g. `ollama pull llama3`). Default: "llama3".
+model = "llama3"
+
+# Where your local Ollama server lives. Point this at another box to use a
+# remote Ollama on your LAN. Default: "http://localhost:11434".
+ollama_host = "http://localhost:11434"
+
+# Seconds to wait for Ollama before giving up and falling back to the raw tree.
+# Default: 60.
+timeout = 60
+
+# Default persona for `yak today`: "standup", "story", or "learning".
+# Override per-run with --format. Default: "story".
+format = "story"
