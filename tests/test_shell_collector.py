@@ -152,3 +152,46 @@ def test_event_on_date() -> None:
     assert not ev.on_date(date(2026, 6, 17))
     undated = Event(cmd="x", ts=None, cwd=None, source="shell:bash")
     assert not undated.on_date(date(2026, 6, 18))
+
+
+# --- redaction integration (issue #8) ------------------------------------
+
+
+def _write_secret_history(path: Path) -> None:
+    """A zsh extended-history file whose commands carry a secret."""
+    # Assembled at runtime so no full ghp_ literal sits in source.
+    token = "ghp" + "_" + "abcdefabcdefabcdefabcdefabcdefabcdef12"
+    path.write_text(
+        f": 1750118400:0;export GITHUB_TOKEN={token}\n"
+        ": 1750118460:0;git status\n"
+    )
+
+
+def test_collect_redacts_secrets_by_default(tmp_path: Path) -> None:
+    hist = tmp_path / ".zsh_history"
+    _write_secret_history(hist)
+    events = shell.collect(shell="zsh", path=hist)
+    cmds = "\n".join(e.cmd for e in events)
+    assert "ghp_" not in cmds
+    assert "REDACTED" in cmds
+    # Non-secret command is untouched.
+    assert any(e.cmd == "git status" for e in events)
+
+
+def test_collect_can_opt_out_of_redaction(tmp_path: Path) -> None:
+    hist = tmp_path / ".zsh_history"
+    _write_secret_history(hist)
+    events = shell.collect(shell="zsh", path=hist, redact=False)
+    cmds = "\n".join(e.cmd for e in events)
+    assert "ghp" + "_" + "abcdefabcdef" in cmds
+    assert "REDACTED" not in cmds
+
+
+def test_collect_for_date_redacts_by_default(tmp_path: Path) -> None:
+    hist = tmp_path / ".zsh_history"
+    _write_secret_history(hist)
+    target = datetime.fromtimestamp(1750118400).date()
+    events = shell.collect_for_date(target, shell="zsh", path=hist)
+    cmds = "\n".join(e.cmd for e in events)
+    assert "ghp_" not in cmds
+    assert "REDACTED" in cmds

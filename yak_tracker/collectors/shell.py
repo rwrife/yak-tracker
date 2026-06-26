@@ -34,6 +34,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from ..models import Event
+from ..redact import redact_events
 
 # Recognized shells and the conventional location of their history file,
 # relative to the user's home directory. Order matters for auto-detection
@@ -199,6 +200,7 @@ def collect(
     home: Path | None = None,
     histfile_env: str | None = None,
     path: Path | None = None,
+    redact: bool = True,
 ) -> list[Event]:
     """Collect all shell-history events.
 
@@ -206,16 +208,23 @@ def collect(
     grammar, defaulting to detection/bash). Otherwise the history file is
     located via :func:`locate_history_file`. Returns ``[]`` when no history can
     be found rather than raising, so the CLI degrades gracefully.
+
+    Secrets (API keys, tokens, ``KEY=value`` credentials, URL passwords, …) are
+    scrubbed from each command by default — privacy is the whole point, and that
+    includes the prompt we later hand to Ollama and the ``--json`` export. Pass
+    ``redact=False`` to keep the raw commands.
     """
     if path is not None:
         resolved_shell = shell or detect_shell() or "bash"
-        return parse_history(_read_text(path), resolved_shell)
+        events = parse_history(_read_text(path), resolved_shell)
+        return redact_events(events) if redact else events
 
     located = locate_history_file(shell=shell, home=home, histfile_env=histfile_env)
     if located is None:
         return []
     shell_name, hist_path = located
-    return parse_history(_read_text(hist_path), shell_name)
+    events = parse_history(_read_text(hist_path), shell_name)
+    return redact_events(events) if redact else events
 
 
 def collect_for_date(
@@ -226,16 +235,20 @@ def collect_for_date(
     histfile_env: str | None = None,
     path: Path | None = None,
     include_undated: bool = False,
+    redact: bool = True,
 ) -> list[Event]:
     """Collect shell events, filtered to a single ``day`` (defaults to today).
 
     By default only events whose timestamp falls on ``day`` are returned. Set
     ``include_undated=True`` to also include events with no timestamp (useful for
     bash histories without ``HISTTIMEFORMAT``, where filtering is impossible).
-    Results are sorted by timestamp; undated events sort last.
+    Results are sorted by timestamp; undated events sort last. Secrets are
+    redacted by default; pass ``redact=False`` to keep raw commands.
     """
     target = day or date.today()
-    events = collect(shell=shell, home=home, histfile_env=histfile_env, path=path)
+    events = collect(
+        shell=shell, home=home, histfile_env=histfile_env, path=path, redact=redact
+    )
 
     selected = [
         e for e in events if e.on_date(target) or (include_undated and e.ts is None)

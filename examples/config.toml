@@ -29,3 +29,10 @@ timeout = 60
 # Default persona for `yak today`: "standup", "story", or "learning".
 # Override per-run with --format. Default: "story".
 format = "story"
+
+# Scrub secrets (API keys, tokens, KEY=value credentials, URL passwords) from
+# shell commands before they reach the Ollama prompt or `--json` export. This is
+# the privacy stance that makes yak-tracker safe to point at real history, so it
+# is ON by default. Set to false (or pass --no-redact) only if you want the raw
+# commands. Default: true.
+redact = true

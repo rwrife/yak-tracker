@@ -122,6 +122,11 @@ def raw(
         "--include-undated",
         help="Also include events with no timestamp (e.g. plain bash history).",
     ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from commands (show the raw history).",
+    ),
 ) -> None:
     """Dump a day's raw shell-history events as a table.
 
@@ -129,6 +134,10 @@ def raw(
     events and lists the ones from the chosen day. Timestamps appear where the
     history format records them (zsh extended history, or bash with
     ``HISTTIMEFORMAT`` set); otherwise the Time column shows ``—``.
+
+    Secrets (API keys, tokens, ``KEY=value`` credentials, URL passwords) are
+    redacted to ``«REDACTED:…»`` by default; pass ``--no-redact`` to see the raw
+    commands.
     """
     target = _parse_date(date_str)
     events = shell_collector.collect_for_date(
@@ -136,6 +145,7 @@ def raw(
         shell=shell,
         path=histfile,
         include_undated=include_undated,
+        redact=not no_redact,
     )
     render_events(
         events,
@@ -156,6 +166,7 @@ def _collect_day_events(
     histfile: Path | None,
     no_git: bool,
     no_shell: bool,
+    redact: bool = True,
 ) -> list:
     """Collect a day's shell + git events (shared by ``sessions`` and ``today``)."""
     collected: list = []
@@ -164,6 +175,7 @@ def _collect_day_events(
             target,
             shell=shell,
             path=histfile,
+            redact=redact,
         )
     if not no_git:
         repo_paths = list(repos) if repos else [Path.cwd()]
@@ -213,13 +225,19 @@ def sessions(
         "--no-shell",
         help="Skip the shell collector (git activity only).",
     ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
 ) -> None:
     """Bucket a day's shell + git activity into time-gapped work sessions.
 
     Merges shell-history events with git commits/reflog across the given repos
     (``--repo``, defaulting to the current directory) and splits the combined
     timeline wherever there's an idle gap longer than ``--idle-gap`` minutes.
-    Only timestamped events can be placed on the timeline.
+    Only timestamped events can be placed on the timeline. Secrets in shell
+    commands are redacted by default; pass ``--no-redact`` to keep them raw.
     """
     target = _parse_date(date_str)
 
@@ -230,6 +248,7 @@ def sessions(
         histfile=histfile,
         no_git=no_git,
         no_shell=no_shell,
+        redact=not no_redact,
     )
 
     day_sessions = sessionize(collected, idle_gap=idle_gap)
@@ -329,6 +348,11 @@ def today(
         "--no-shell",
         help="Skip the shell collector (git activity only).",
     ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands before narration/JSON.",
+    ),
 ) -> None:
     """Reconstruct the day and narrate it with a local LLM.
 
@@ -362,6 +386,7 @@ def today(
         model=model,
         ollama_host=ollama_host,
         format=fmt,
+        redact=False if no_redact else None,
     )
 
     def _forest_for(day: date) -> list:
@@ -372,6 +397,7 @@ def today(
             histfile=histfile,
             no_git=no_git,
             no_shell=no_shell,
+            redact=config.redact,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
@@ -540,6 +566,11 @@ def week(
         "--no-shell",
         help="Skip the shell collector (git activity only).",
     ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
 ) -> None:
     """Roll up a week into a per-day tangent-depth heatmap.
 
@@ -559,6 +590,7 @@ def week(
     config = load_config().with_overrides(
         idle_gap=idle_gap,
         repos=list(repos) if repos else None,
+        redact=False if no_redact else None,
     )
 
     def _forest_for(day: date) -> list:
@@ -569,6 +601,7 @@ def week(
             histfile=histfile,
             no_git=no_git,
             no_shell=no_shell,
+            redact=config.redact,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
@@ -616,6 +649,7 @@ def config_cmd(
     table.add_row("ollama_host", cfg.ollama_host)
     table.add_row("timeout", f"{cfg.timeout:g} s")
     table.add_row("format", cfg.format)
+    table.add_row("redact", "on" if cfg.redact else "[red]off[/red]")
     table.add_row("config file", str(cfg.path))
     console.print(table)
     console.print(f"[dim]source: {cfg.source}[/dim]")

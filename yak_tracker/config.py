@@ -23,6 +23,7 @@ Recognised keys (all optional)::
     ollama_host = "http://localhost:11434"
     timeout = 60                        # seconds for the Ollama request
     format = "story"                    # default persona for `yak today`
+    redact = true                       # scrub secrets/tokens before they leave the box
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ DEFAULTS: dict[str, object] = {
     "ollama_host": "http://localhost:11434",
     "timeout": 60.0,
     "format": "story",
+    "redact": True,
 }
 
 # Environment variable that can point at an alternate config file (handy for
@@ -70,6 +72,9 @@ class Config:
         ollama_host: Base URL of the local Ollama server.
         timeout: Seconds to wait on the Ollama HTTP call before falling back.
         format: Default ``today`` persona (one of :data:`VALID_FORMATS`).
+        redact: Whether to scrub secrets/tokens from shell commands before they
+            reach the LLM prompt or JSON export. On by default; the privacy
+            stance is the point.
         path: The config file that was consulted (whether or not it existed).
         source: Human-readable note on where values came from — surfaced by
             ``yak config`` (e.g. "defaults (no config file)" or the file path).
@@ -83,6 +88,7 @@ class Config:
     ollama_host: str = "http://localhost:11434"
     timeout: float = 60.0
     format: str = "story"
+    redact: bool = True
     path: Path | None = None
     source: str = "defaults"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -96,6 +102,7 @@ class Config:
         ollama_host: str | None = None,
         timeout: float | None = None,
         format: str | None = None,
+        redact: bool | None = None,
     ) -> Config:
         """Return a copy with any non-``None`` CLI overrides applied.
 
@@ -116,6 +123,8 @@ class Config:
             changes["timeout"] = float(timeout)
         if format is not None:
             changes["format"] = format
+        if redact is not None:
+            changes["redact"] = bool(redact)
         return replace(self, **changes) if changes else self
 
 
@@ -159,6 +168,14 @@ def _coerce_str(raw: object, key: str, warnings: list[str]) -> str | None:
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
     warnings.append(f"{key!r} should be a non-empty string; ignoring it")
+    return None
+
+
+def _coerce_bool(raw: object, key: str, warnings: list[str]) -> bool | None:
+    """Coerce ``raw`` to a bool, warning (and dropping) on non-boolean input."""
+    if isinstance(raw, bool):
+        return raw
+    warnings.append(f"{key!r} should be true or false; ignoring it")
     return None
 
 
@@ -210,7 +227,12 @@ def _parse_table(
                     f"got {fmt!r}, ignoring it"
                 )
 
-    known = {"repos", "idle_gap", "timeout", "model", "ollama_host", "format"}
+    if "redact" in data:
+        flag = _coerce_bool(data["redact"], "redact", warnings)
+        if flag is not None:
+            values["redact"] = flag
+
+    known = {"repos", "idle_gap", "timeout", "model", "ollama_host", "format", "redact"}
     for unknown in sorted(set(data) - known):
         warnings.append(f"unknown config key {unknown!r}; ignoring it")
 
@@ -231,6 +253,7 @@ def load_config(path: Path | None = None) -> Config:
         ollama_host=str(DEFAULTS["ollama_host"]),
         timeout=float(DEFAULTS["timeout"]),  # type: ignore[arg-type]
         format=str(DEFAULTS["format"]),
+        redact=bool(DEFAULTS["redact"]),
         path=cfg_path,
     )
 
