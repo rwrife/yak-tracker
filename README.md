@@ -11,20 +11,21 @@ Three outputs from the same data:
 
 ## Status
 
-🚧 Early — building toward v0.1. Working today: the CLI scaffold (M1), the
-**shell-history collector (M2)** — `yak raw` parses your bash/zsh history into
-normalized events — the **git collector + sessionizer (M3)** — `yak
+✅ **v0.1.0 is here.** The full milestone arc has shipped: the CLI scaffold
+(M1), the **shell-history collector (M2)** — `yak raw` parses your bash/zsh
+history into normalized events — the **git collector + sessionizer (M3)** — `yak
 sessions` interleaves git commits/reflog with shell history and buckets it into
 time-gapped work sessions — the **yak-shaving tree (M4)** — `yak today`
 reconstructs each session as an intention with its rabbit holes nested beneath
-it — and **Ollama narration (M5)** — `yak today --format standup|story|learning`
+it — **Ollama narration (M5)** — `yak today --format standup|story|learning`
 narrates the tree with your local LLM, with a config file and graceful offline
-fallback. **Packaging polish (M6)** is underway — `yak demo` shows a built-in
-sample day with zero setup, and `yak today --json` for scripting and `--since N`
-for multi-day rollups have landed. The first v0.2
-backlog feature is in too: **`yak week`** rolls a whole week into a tangent-depth
-heatmap. See
-[`PLAN.md`](./PLAN.md) for the roadmap and milestones.
+fallback — and **packaging polish (M6)**: `yak demo` shows a built-in sample day
+with zero setup, `yak today --json` and `--since N` cover scripting and
+multi-day rollups, and the tool installs cleanly via pipx/uv/pip. Two v0.2
+backlog features landed early too: **`yak week`** rolls a whole week into a
+tangent-depth heatmap, and a **redaction pass** scrubs secrets before they ever
+leave the box. See [`CHANGELOG.md`](./CHANGELOG.md) for the full release notes
+and [`PLAN.md`](./PLAN.md) for the roadmap.
 
 ```bash
 yak --version   # 🐃 it's alive
@@ -307,16 +308,18 @@ It's **on by default** and conservative-by-design (it would rather redact a bit
 too much than leak). Turn it off per-run with `--no-redact`, or globally with
 `redact = false` in your config — you have to opt *out*, never in.
 
-## Planned usage
+## At a glance
 
 ```bash
-yak today                      # render + narrate today — available now ✅
-yak today --format standup     # just the shippable bullet points — available now ✅
-yak today --format story       # the rabbit-hole saga — available now ✅
-yak today --format learning    # what you learned today — available now ✅
-yak sessions                   # list time-gapped work sessions — available now ✅
-yak raw                        # dump normalized events (no LLM) — available now ✅
-yak config                     # show resolved configuration — available now ✅
+yak today                      # render + narrate today ✅
+yak today --format standup     # just the shippable bullet points ✅
+yak today --format story       # the rabbit-hole saga ✅
+yak today --format learning    # what you learned today ✅
+yak week                       # a week of rabbit holes as a depth heatmap ✅
+yak sessions                   # list time-gapped work sessions ✅
+yak raw                        # dump normalized events (no LLM) ✅
+yak demo                       # a built-in sample day, zero setup ✅
+yak config                     # show resolved configuration ✅
 ```
 
 ## Requirements
