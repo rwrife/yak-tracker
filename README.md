@@ -23,8 +23,9 @@ fallback — and **packaging polish (M6)**: `yak demo` shows a built-in sample d
 with zero setup, `yak today --json` and `--since N` cover scripting and
 multi-day rollups, and the tool installs cleanly via pipx/uv/pip. Two v0.2
 backlog features landed early too: **`yak week`** rolls a whole week into a
-tangent-depth heatmap, and a **redaction pass** scrubs secrets before they ever
-leave the box. See [`CHANGELOG.md`](./CHANGELOG.md) for the full release notes
+tangent-depth heatmap, a **redaction pass** scrubs secrets before they ever
+leave the box, and **`yak score`** distils a day to a single 0–100 focus number.
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full release notes
 and [`PLAN.md`](./PLAN.md) for the roadmap.
 
 ```bash
@@ -34,6 +35,7 @@ yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
 yak week                  # a week of rabbit holes as a depth heatmap
+yak score                 # a single 0–100 focus score for today
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 yak config      # show the resolved configuration
@@ -252,6 +254,79 @@ local-only collection and sessionizing engine, but skips Ollama narration — th
 week view is about *shape*, not prose. The window defaults to 7 days; `--since
 N` overrides the span (e.g. `--since 30` for a month).
 
+## `yak score` — daily focus metric
+
+`yak score` boils the whole day down to **one number**: a 0–100 *focus score*
+that gamifies staying on task. `100` is a laser-focused day with no rabbit
+holes; the score falls as your work spirals deeper and more often into tangents.
+Think of it as a credit score for *not* yak-shaving — bigger is better.
+
+```bash
+yak score                         # today's focus score
+yak score --date 2026-06-17       # a specific day (YYYY-MM-DD)
+yak score --history               # a sparkline of the last 14 days
+yak score --history --since 30    # ...over a month instead
+yak score --repo ~/code/app -r ~/code/lib   # include several repos
+yak score --no-git                # shell history only
+yak score --idle-gap 15           # split sessions on 15-min gaps (default 25)
+```
+
+A single day prints the score with a plain-language band and the depth stats
+behind it:
+
+```
+💡 Yak score: 69/100 some detours — avg detour 1.2, deepest 2 across 1 session(s).
+```
+
+`--history` charts your focus trend as a unicode sparkline with average / most-
+focused / deepest-rabbit-hole callouts, so you can see at a glance whether the
+week held together or unravelled (quiet days with no activity show as gaps):
+
+```
+💡 Yak score — 2026-06-04 → 2026-06-17 (14d)
+  ...per-day table...
+  Focus: ▇▇▅ ▆█▇▁▄▇█▅▆  (low → high)
+  Average: 78/100 focused over 11 active day(s).
+  ✨ Most focused: 100/100 on Wed 2026-06-11.
+  🔥 Deepest rabbit hole: 41/100 on Mon 2026-06-09.
+```
+
+The day's score also rides along as the footer of `yak today`, so the headline
+view closes with your number. Like `yak week`, scoring uses the exact same
+local-only collection engine and never touches Ollama.
+
+### How the score is computed
+
+The score looks at the **detours** in each session — the rabbit holes that branch
+off your root intention (installs, forced fixes, wandering into other repos,
+branch hops). Plain in-line steps don't count; only a genuine tangent does. For
+each session we measure two things about its detours:
+
+- **average detour depth** — the mean depth of each top-level detour, where a
+  detour with nothing nested under it is depth `1` and one that spawned a
+  sub-detour that spawned another is depth `3`. *"On a typical tangent, how deep
+  did I go?"*
+- **max detour depth** — the single deepest detour chain in the session. *"How
+  bad did the worst rabbit hole get?"*
+
+A session with **no detours** scores a clean `100`. Otherwise the two depths are
+turned into a penalty and decayed onto the 0–100 scale:
+
+```
+penalty   = 2.0 * avg_depth + 1.0 * max_depth
+score     = round( 100 / (1 + penalty / 10) )
+```
+
+The typical tangent is weighted twice as heavily as the single worst one, and
+the decay (rather than a straight subtraction) keeps the score bounded in
+`[0, 100]` for *any* depth while making the **first** level of yak-shaving cost
+more than the tenth — diminishing returns on going ever deeper. A **day's** score
+is the plain average of its sessions' scores, so one deep session can't tank an
+otherwise focused day; a day with no sessions at all has *no* score (it shows as
+a quiet day rather than a misleading `100`). As reference points: one shallow
+one-level detour lands around **77**, a couple of moderate tangents around
+**59**, and a genuinely gnarly afternoon (avg ≈ 3, deepest ≈ 6) around **45**.
+
 ## `yak config` — settings & defaults
 
 yak-tracker reads an optional TOML config so you don't have to retype `--repo`,
@@ -316,6 +391,7 @@ yak today --format standup     # just the shippable bullet points ✅
 yak today --format story       # the rabbit-hole saga ✅
 yak today --format learning    # what you learned today ✅
 yak week                       # a week of rabbit holes as a depth heatmap ✅
+yak score                      # a single 0–100 daily focus score ✅
 yak sessions                   # list time-gapped work sessions ✅
 yak raw                        # dump normalized events (no LLM) ✅
 yak demo                       # a built-in sample day, zero setup ✅

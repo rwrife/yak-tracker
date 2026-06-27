@@ -24,11 +24,15 @@ from .narrate import narrate as narrate_forest
 from .render import (
     render_events,
     render_narration,
+    render_score,
+    render_score_history,
     render_sessions,
     render_trees,
     render_week,
+    score_footer,
 )
 from .sample import sample_events
+from .score import DEFAULT_HISTORY_DAYS, build_history, score_day
 from .serialize import forest_to_dict
 from .sessionize import sessionize
 from .tree import build_forest
@@ -418,11 +422,16 @@ def today(
             "(No timestamped shell/git events — check --repo or your history "
             "file's timestamps.)"
         )
+        day_score = score_day(day, forest)
 
         # No data, or narration explicitly skipped → just the raw tree (no network).
         if not forest or no_llm:
             render_trees(
-                forest, console=console, title=tree_title, empty_message=empty_message
+                forest,
+                console=console,
+                title=tree_title,
+                empty_message=empty_message,
+                day_score=day_score,
             )
             continue
 
@@ -437,12 +446,17 @@ def today(
 
         if narration.ok:
             render_narration(narration, console=console, title=tree_title)
+            console.print(score_footer(day_score))
         else:
             # Graceful fallback: explain why narration was skipped, then raw tree.
             if narration.notice:
                 console.print(f"[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]\n")
             render_trees(
-                forest, console=console, title=tree_title, empty_message=empty_message
+                forest,
+                console=console,
+                title=tree_title,
+                empty_message=empty_message,
+                day_score=day_score,
             )
 
 
@@ -613,6 +627,126 @@ def week(
         f"({span}d)"
     )
     render_week(summary, console=console, title=title)
+
+
+@app.command()
+def score(
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Day to score (YYYY-MM-DD). Defaults to today.",
+    ),
+    history: bool = typer.Option(
+        False,
+        "--history",
+        help="Show a sparkline of focus scores over recent days instead of one day.",
+    ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help=(
+            "With --history, how many days to chart, ending at --date "
+            f"(default {DEFAULT_HISTORY_DAYS})."
+        ),
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to config or the current directory.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        None,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    no_git: bool = typer.Option(
+        False,
+        "--no-git",
+        help="Skip the git collector (shell history only).",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip the shell collector (git activity only).",
+    ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
+) -> None:
+    """Score your focus for a day — one number for how deep your detours went.
+
+    The **yak score** distils a day to a 0–100 focus number: ``100`` is a
+    laser-focused day with no rabbit holes, and the score falls as your work
+    spirals deeper and more often into tangents (installs, forced fixes, wandering
+    into other repos, branch hopping). It gamifies staying on task — bigger is
+    better, like a credit score for not yak-shaving.
+
+    By default it scores a single day (``--date``, defaulting to today). With
+    ``--history`` it charts the last ``--since`` days (default a fortnight) as a
+    sparkline with average / best / worst callouts, so you can see your focus
+    trend at a glance. Same local-only collection as ``yak today`` — no Ollama,
+    no network. The exact formula is documented in the README.
+    """
+    end = _parse_date(date_str)
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        redact=False if no_redact else None,
+    )
+
+    def _forest_for(day: date) -> list:
+        collected = _collect_day_events(
+            day,
+            repos=list(config.repos) if config.repos else None,
+            shell=shell,
+            histfile=histfile,
+            no_git=no_git,
+            no_shell=no_shell,
+            redact=config.redact,
+        )
+        day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+        return build_forest(day_sessions)
+
+    if history:
+        span = DEFAULT_HISTORY_DAYS if since is None else since
+        hist = build_history(end, span, _forest_for)
+        title = (
+            f"\N{ELECTRIC LIGHT BULB} Yak score — "
+            f"{hist.start.isoformat()} → {hist.end.isoformat()} ({span}d)"
+        )
+        render_score_history(hist, console=console, title=title)
+        return
+
+    day_score = score_day(end, _forest_for(end))
+    render_score(
+        day_score,
+        console=console,
+        title=f"\N{ELECTRIC LIGHT BULB} Yak score — {end.isoformat()}",
+        empty_message=(
+            f"No focus score for {end.isoformat()}. "
+            "(No timestamped shell/git events — check --repo or your history "
+            "file's timestamps. Try --history for a trend.)"
+        ),
+    )
 
 
 @app.command(name="config")

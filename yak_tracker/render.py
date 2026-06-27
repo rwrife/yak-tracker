@@ -15,6 +15,7 @@ from rich.tree import Tree as RichTree
 
 from .models import Event
 from .narrate import Narration
+from .score import DayScore, ScoreHistory, sparkline
 from .sessionize import Session
 from .tree import DetourKind, Node
 from .week import HEAT_LEVELS, WeekSummary, heat_level
@@ -152,8 +153,14 @@ def render_trees(
     console: Console | None = None,
     title: str | None = None,
     empty_message: str = "No sessions to shave.",
+    day_score: DayScore | None = None,
 ) -> None:
-    """Print one yak-shaving tree per session, or a friendly empty note."""
+    """Print one yak-shaving tree per session, or a friendly empty note.
+
+    When ``day_score`` is supplied, a one-line **focus score** footer is printed
+    under the trees (see :func:`score_footer`) so ``yak today`` closes with the
+    day's number.
+    """
     console = console or Console()
     if not forest:
         console.print(f"[yellow]{empty_message}[/yellow]")
@@ -167,6 +174,8 @@ def render_trees(
         console.print(
             f"  [dim]{detours} event(s), {depth} level(s) deep[/dim]\n"
         )
+    if day_score is not None and not day_score.is_empty:
+        console.print(score_footer(day_score))
 
 
 # --- weekly heatmap (yak week) ---------------------------------------------
@@ -270,6 +279,158 @@ def render_week(
     else:
         console.print(
             "  [dim]No rabbit holes this week — every session stayed flat. \N{SPARKLES}[/dim]"
+        )
+
+
+# --- focus score (yak score) -----------------------------------------------
+
+# Focus-score colour ramp (low → high). A high score is good (focused), so green
+# is the *top* of the range and red the bottom — the inverse of the heatmap,
+# which colours *depth* (where hot == bad).
+_SCORE_BANDS: tuple[tuple[float, str, str], ...] = (
+    (85.0, "bold green", "laser-focused"),
+    (70.0, "green", "focused"),
+    (55.0, "yellow", "some detours"),
+    (40.0, "orange3", "rabbit-hole-y"),
+    (0.0, "red", "deep in the weeds"),
+)
+
+
+def score_style(score: float) -> tuple[str, str]:
+    """Return the ``(rich_style, blurb)`` for a 0–100 focus ``score``."""
+    for threshold, style, blurb in _SCORE_BANDS:
+        if score >= threshold:
+            return style, blurb
+    # Defensive: the last band has threshold 0.0, so this is unreachable for
+    # any non-negative score, but keeps the type-checker (and a stray -0.0) happy.
+    return _SCORE_BANDS[-1][1], _SCORE_BANDS[-1][2]
+
+
+def _score_badge(score: float) -> str:
+    """A coloured ``NN/100`` badge for a focus score."""
+    style, _ = score_style(score)
+    return f"[{style}]{round(score)}/100[/{style}]"
+
+
+def score_footer(day: DayScore) -> str:
+    """One-line focus-score summary for a day (used as the ``yak today`` footer).
+
+    Shows the badge, a plain-language blurb, and the depth stats behind it. Safe
+    to call only for non-empty days (an empty day has no score).
+    """
+    score = day.score if day.score is not None else 100.0
+    style, blurb = score_style(score)
+    sess = day.session_count
+    return (
+        f"  \N{ELECTRIC LIGHT BULB} [bold]Yak score:[/bold] {_score_badge(score)} "
+        f"[{style}]{blurb}[/{style}] "
+        f"[dim]— avg detour {day.avg_depth:.1f}, deepest {day.max_depth} "
+        f"across {sess} session(s).[/dim]"
+    )
+
+
+def score_history_table(history: ScoreHistory, *, title: str | None = None) -> Table:
+    """Per-day focus-score table for ``yak score --history``."""
+    table = Table(title=title, expand=True, highlight=True)
+    table.add_column("Day", style="cyan", no_wrap=True)
+    table.add_column("Date", style="dim", no_wrap=True)
+    table.add_column("Score", no_wrap=True, justify="right")
+    table.add_column("Focus", overflow="fold")
+    table.add_column("Sessions", style="green", no_wrap=True, justify="right")
+    table.add_column("Avg", style="yellow", no_wrap=True, justify="right")
+    table.add_column("Deepest", style="yellow", no_wrap=True, justify="right")
+
+    for d in history.days:
+        if d.is_empty or d.score is None:
+            table.add_row(
+                d.day.strftime("%a"),
+                d.day.isoformat(),
+                "[grey39]—[/grey39]",
+                "[grey39](quiet day)[/grey39]",
+                "—",
+                "—",
+                "—",
+            )
+            continue
+        style, blurb = score_style(d.score)
+        table.add_row(
+            d.day.strftime("%a"),
+            d.day.isoformat(),
+            _score_badge(d.score),
+            f"[{style}]{blurb}[/{style}]",
+            str(d.session_count),
+            f"{d.avg_depth:.1f}",
+            str(d.max_depth),
+        )
+    return table
+
+
+def render_score(
+    day: DayScore,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No focus score — nothing happened that day.",
+) -> None:
+    """Print a single day's focus score (the bare ``yak score`` surface)."""
+    console = console or Console()
+    if day.is_empty or day.score is None:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+    if title:
+        console.print(f"[bold]{title}[/bold]")
+    console.print(score_footer(day))
+
+
+def render_score_history(
+    history: ScoreHistory,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No activity in this window — no scores to chart.",
+) -> None:
+    """Print the focus-score table, a sparkline, and average/best/worst callouts."""
+    console = console or Console()
+    if not history.days:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+
+    console.print(score_history_table(history, title=title))
+
+    if not history.scored_days:
+        console.print(
+            "  [dim]No timestamped activity in this window — "
+            "every day was quiet. \N{SPARKLES}[/dim]"
+        )
+        return
+
+    # Absolute-scale sparkline of the whole window (quiet days show as gaps).
+    spark = sparkline([d.score for d in history.days])
+    console.print(f"  [bold]Focus:[/bold] [cyan]{spark}[/cyan]  [dim](low → high)[/dim]")
+
+    avg = history.average
+    if avg is not None:
+        style, blurb = score_style(avg)
+        console.print(
+            f"  [bold]Average:[/bold] {_score_badge(avg)} "
+            f"[{style}]{blurb}[/{style}] "
+            f"[dim]over {len(history.scored_days)} active day(s).[/dim]"
+        )
+
+    best, worst = history.best, history.worst
+    if best is not None and best.score is not None:
+        bstyle, _ = score_style(best.score)
+        console.print(
+            f"  [bold green]\N{SPARKLES} Most focused:[/bold green] "
+            f"[{bstyle}]{round(best.score)}/100[/{bstyle}] "
+            f"[dim]on {best.day.strftime('%a %Y-%m-%d')}.[/dim]"
+        )
+    if worst is not None and worst.score is not None and worst is not best:
+        wstyle, _ = score_style(worst.score)
+        console.print(
+            f"  [bold red]\N{FIRE} Deepest rabbit hole:[/bold red] "
+            f"[{wstyle}]{round(worst.score)}/100[/{wstyle}] "
+            f"[dim]on {worst.day.strftime('%a %Y-%m-%d')}.[/dim]"
         )
 
 
