@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **`yak score`** — daily focus metric. Distils a day to a single 0–100 score
+  (higher = more focused) computed from the average and max **detour depth** of
+  each session's rabbit holes; a day with no tangents scores `100`. Prints a
+  banded one-line summary for a single day, rides along as the footer of
+  `yak today`, and `--history` charts the trend as a unicode sparkline with
+  average / most-focused / deepest-rabbit-hole callouts. Shares the same
+  local-only collection engine, no narration. Flags: `--date`, `--history`,
+  `--since`, `--repo`, `--idle-gap`, `--no-git`, `--no-shell`, `--no-redact`.
+  The scoring formula is documented in the README. (v0.2 backlog, landed early)
 
 ## [0.1.0] — 2026-06-26
 
