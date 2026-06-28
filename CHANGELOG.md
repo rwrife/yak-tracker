@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`yak config --init`** — write a starter config. Drops a fully-commented
+  `config.toml` at the resolved path (creating the directory if needed), with
+  every key set to its built-in default so it changes nothing until edited — the
+  one-step way for a fresh install to get a config without hunting down the XDG
+  location. Refuses to overwrite an existing file unless `--force` is given. The
+  same content still ships in `examples/config.toml` for copying by hand. (M6)
 - **`yak score`** — daily focus metric. Distils a day to a single 0–100 score
   (higher = more focused) computed from the average and max **detour depth** of
   each session's rabbit holes; a day with no tangents scores `100`. Prints a

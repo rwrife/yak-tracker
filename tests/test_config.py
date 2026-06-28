@@ -6,10 +6,13 @@ from pathlib import Path
 
 from yak_tracker.config import (
     DEFAULTS,
+    STARTER_CONFIG,
     VALID_FORMATS,
     Config,
+    ConfigExistsError,
     default_config_path,
     load_config,
+    write_starter_config,
 )
 
 
@@ -178,3 +181,61 @@ def test_with_overrides_can_force_redact_off() -> None:
     assert base.with_overrides(redact=False).redact is False
     # None means "no override" so the file/default value is kept.
     assert base.with_overrides(redact=None).redact is True
+
+
+# --- starter config / `yak config --init` (M6) ---------------------------
+
+
+def test_write_starter_config_creates_file_and_parents(tmp_path: Path) -> None:
+    target = tmp_path / "nested" / "dir" / "config.toml"
+    written = write_starter_config(target)
+    assert written == target
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == STARTER_CONFIG
+
+
+def test_starter_config_round_trips_to_defaults(tmp_path: Path) -> None:
+    # The generated file must parse cleanly (no warnings) and yield exactly the
+    # built-in defaults — this guards STARTER_CONFIG against key/type drift.
+    target = tmp_path / "config.toml"
+    write_starter_config(target)
+    cfg = load_config(target)
+    assert cfg.warnings == ()
+    assert cfg.idle_gap == DEFAULTS["idle_gap"]
+    assert cfg.model == DEFAULTS["model"]
+    assert cfg.ollama_host == DEFAULTS["ollama_host"]
+    assert cfg.timeout == DEFAULTS["timeout"]
+    assert cfg.format == DEFAULTS["format"]
+    assert cfg.redact == DEFAULTS["redact"]
+    # repos is commented out in the starter, so it stays at the default (empty).
+    assert cfg.repos == ()
+
+
+def test_write_starter_config_refuses_existing(tmp_path: Path) -> None:
+    target = tmp_path / "config.toml"
+    target.write_text("idle_gap = 5\n")
+    try:
+        write_starter_config(target)
+    except ConfigExistsError as exc:
+        assert exc.path == target
+    else:  # pragma: no cover - guard against a silent clobber regression
+        raise AssertionError("expected ConfigExistsError")
+    # The user's edited file is left untouched.
+    assert target.read_text() == "idle_gap = 5\n"
+
+
+def test_write_starter_config_force_overwrites(tmp_path: Path) -> None:
+    target = tmp_path / "config.toml"
+    target.write_text("idle_gap = 5\n")
+    written = write_starter_config(target, force=True)
+    assert written == target
+    assert target.read_text(encoding="utf-8") == STARTER_CONFIG
+
+
+def test_write_starter_config_uses_default_path(monkeypatch, tmp_path: Path) -> None:
+    # With no explicit path, it honours $YAK_TRACKER_CONFIG via default_config_path.
+    target = tmp_path / "yak" / "config.toml"
+    monkeypatch.setenv("YAK_TRACKER_CONFIG", str(target))
+    written = write_starter_config()
+    assert written == target
+    assert target.is_file()
