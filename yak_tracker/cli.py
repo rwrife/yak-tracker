@@ -20,6 +20,7 @@ from . import __version__
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
+from .export import ExportError, write_export
 from .narrate import narrate as narrate_forest
 from .render import (
     render_events,
@@ -337,6 +338,33 @@ def today(
             "--no-llm; narration is prose, not data)."
         ),
     ),
+    export: str = typer.Option(
+        None,
+        "--export",
+        "-e",
+        help=(
+            "Write the day to a notes file instead of (just) printing. Only "
+            "'md' is supported. Honours --format for the body; goes to --out "
+            "or the configured vault_path as <date>.md."
+        ),
+    ),
+    out_dir: Path = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help=(
+            "Destination directory for --export (overrides config vault_path). "
+            "Created if missing."
+        ),
+    ),
+    template: str = typer.Option(
+        None,
+        "--template",
+        help=(
+            "Filename template for --export; the only placeholder is {date} "
+            "(e.g. 'daily/{date}.md'). Overrides config filename_template."
+        ),
+    ),
     no_llm: bool = typer.Option(
         False,
         "--no-llm",
@@ -377,9 +405,20 @@ def today(
     ``--json`` to emit the yak-shaving forest as machine-readable JSON for
     scripting or export (``--json`` implies ``--no-llm``; with ``--since`` it
     emits a JSON array, one document per day).
+
+    Use ``--export md`` to write each day to a dated markdown note (for Obsidian
+    or any daily-notes vault) instead of printing: front-matter carries the date
+    and yak score, the body is the chosen ``--format`` (narrated when Ollama is
+    available, else a plain outline). It goes to ``--out`` or the configured
+    ``vault_path`` as ``<date>.md`` and is rewritten in place on re-run.
     """
     if fmt is not None and fmt not in VALID_FORMATS:
         raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    if export is not None and export.lower() != "md":
+        raise typer.BadParameter("--export only supports 'md'")
+    if as_json and export is not None:
+        raise typer.BadParameter("--json and --export are mutually exclusive")
 
     end = _parse_date(date_str)
     days = _date_range(end, since)
@@ -391,6 +430,7 @@ def today(
         ollama_host=ollama_host,
         format=fmt,
         redact=False if no_redact else None,
+        filename_template=template,
     )
 
     def _forest_for(day: date) -> list:
@@ -412,6 +452,54 @@ def today(
         documents = [forest_to_dict(_forest_for(day), day=day) for day in days]
         payload = documents[0] if len(documents) == 1 else documents
         console.print_json(json.dumps(payload, ensure_ascii=False))
+        return
+
+    # --export writes each day to a dated markdown note (Obsidian / daily notes)
+    # instead of rendering to the terminal. Narration (when available) is the
+    # body; otherwise a deterministic outline is, so an offline export still has
+    # content. One file per day, overwritten in place (idempotent).
+    if export is not None:
+        for day in days:
+            forest = _forest_for(day)
+            day_score = score_day(day, forest)
+
+            narration_text: str | None = None
+            if forest and not no_llm:
+                narration = narrate_forest(
+                    forest,
+                    fmt=config.format,
+                    model=config.model,
+                    host=config.ollama_host,
+                    timeout=config.timeout,
+                    date_label=day.isoformat(),
+                )
+                if narration.ok:
+                    narration_text = narration.text
+                elif narration.notice:
+                    console.print(
+                        f"[yellow]\N{WARNING SIGN}  {narration.notice} "
+                        f"Writing the raw outline instead.[/yellow]"
+                    )
+
+            try:
+                result = write_export(
+                    forest,
+                    day=day,
+                    out_dir=out_dir,
+                    vault_path=config.vault_path,
+                    filename_template=config.filename_template,
+                    score=day_score,
+                    fmt=config.format,
+                    narration=narration_text,
+                )
+            except ExportError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+
+            verb = "Wrote" if result.created else "Updated"
+            console.print(
+                f"\N{OX} {verb} [bold]{result.path}[/bold] "
+                f"({result.bytes_written:,} bytes)"
+            )
         return
 
     for day in days:

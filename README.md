@@ -166,6 +166,7 @@ yak today --ollama-host http://box:11434   # point at a remote Ollama
 yak today --date 2026-06-17       # a specific day (YYYY-MM-DD)
 yak today --since 7               # the last 7 days, oldest first
 yak today --json                  # machine-readable forest (for scripting)
+yak today --export md --out ~/notes   # write today's note to a vault
 yak today --repo ~/code/app -r ~/code/lib  # include several repos
 yak today --idle-gap 15           # split sessions on 15-min gaps (default 25)
 yak today --no-git                # shell history only
@@ -225,6 +226,42 @@ an array of N day-documents (oldest first).
 
 `--since N` also works for the human render — it reconstructs the last N days in
 sequence, so `yak today --since 7` walks your whole week of rabbit holes.
+
+### Export: `--export md` → Obsidian / daily notes
+
+Drop the day straight into a notes vault as a dated markdown file instead of
+printing it. `yak today --export md` writes `<date>.md` with **YAML
+front-matter** (the date, the day's **yak score**, session/detour counts) and a
+body in your chosen `--format` — so Obsidian, Dataview, and friends can index it:
+
+```bash
+yak today --export md --out ~/notes              # write today's note to ~/notes
+yak today --export md                            # use the configured vault_path
+yak today --export md --date 2026-06-17           # a specific day
+yak today --export md --since 7 --out ~/notes      # one file per day, last 7
+yak today --export md --format learning            # learning-log body
+yak today --export md --template 'daily/{date}.md' # custom filename/subdir
+```
+
+The body is the narrated prose when a local Ollama is available; offline (or
+with `--no-llm`) it falls back to a deterministic outline of the yak-shaving
+forest, so an export always has content. Each day maps to **one file**, rewritten
+in place on re-run (idempotent — no duplicate notes). The destination is `--out`
+or the configured `vault_path`, and the filename comes from `filename_template`
+(default `{date}.md`, its only placeholder being `{date}`).
+
+```yaml
+---
+date: "2026-06-17"
+title: "Yak-shaving — 2026-06-17"
+yak_score: 69
+sessions: 1
+max_detour_depth: 2
+format: "learning"
+narrated: true
+tags: [yak-tracker]
+---
+```
 
 ## `yak week` — weekly tangent heatmap
 
@@ -359,6 +396,8 @@ ollama_host = "http://localhost:11434" # where Ollama lives
 timeout     = 60                       # seconds before falling back
 format      = "story"                  # default `yak today` persona
 redact      = true                     # scrub secrets before they leave the box
+vault_path  = "~/notes"                # default dir for `yak today --export md`
+filename_template = "{date}.md"        # export filename; {date} = YYYY-MM-DD
 ```
 
 CLI flags always win over the file (e.g. `--idle-gap 15` overrides `idle_gap`).

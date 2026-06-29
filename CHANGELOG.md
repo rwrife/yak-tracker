@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`yak today --export md`** — write a day straight into an Obsidian / daily-
+  notes vault as a dated `YYYY-MM-DD.md`. The file carries **YAML front-matter**
+  (date, the day's **yak score**, session and max-detour-depth counts, body
+  format) so Obsidian/Dataview can index it, and a body in the chosen `--format`
+  — the narrated prose when a local Ollama is available, or a deterministic
+  outline of the yak-shaving forest offline, so an export always has content.
+  Each day maps to one file, rewritten **in place** on re-run (idempotent). Goes
+  to `--out` or the configured `vault_path`; the filename comes from
+  `filename_template` (`{date}` placeholder, default `{date}.md`, subdirs
+  allowed). New config keys `vault_path` / `filename_template`. (#10)
 - **`yak config --init`** — write a starter config. Drops a fully-commented
   `config.toml` at the resolved path (creating the directory if needed), with
   every key set to its built-in default so it changes nothing until edited — the

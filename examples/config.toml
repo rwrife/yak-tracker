@@ -36,3 +36,14 @@ format = "story"
 # is ON by default. Set to false (or pass --no-redact) only if you want the raw
 # commands. Default: true.
 redact = true
+
+# Default notes vault for `yak today --export md` (~ is expanded). Set this once
+# and you can drop the day's learning log into Obsidian with just
+# `yak today --export md`; --out overrides it per run. Unset by default (so an
+# export without --out errors rather than guessing a location).
+# vault_path = "~/notes"
+
+# Filename for notes written by `yak today --export md`. The only placeholder is
+# {date} (YYYY-MM-DD), so the default writes e.g. 2026-06-29.md. Subdirectories
+# are allowed (e.g. "daily/{date}.md") and created as needed. Default: "{date}.md".
+filename_template = "{date}.md"
