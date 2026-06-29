@@ -19,7 +19,7 @@ from rich.table import Table
 from . import __version__
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
-from .config import VALID_FORMATS, load_config
+from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
 from .narrate import narrate as narrate_forest
 from .render import (
     render_events,
@@ -751,6 +751,16 @@ def score(
 
 @app.command(name="config")
 def config_cmd(
+    init: bool = typer.Option(
+        False,
+        "--init",
+        help="Write a starter config file to the resolved path, then exit.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="With --init, overwrite an existing config file.",
+    ),
     show_path: bool = typer.Option(
         False,
         "--path",
@@ -764,7 +774,34 @@ def config_cmd(
     (``~/.config/yak-tracker/config.toml`` by default) over the built-in
     defaults. Problems loading the file are reported as warnings rather than
     failing, so this doubles as a config linter.
+
+    Use ``--init`` to drop a fully-commented starter config at that path (every
+    key set to its default, so it changes nothing until you edit it) — the
+    one-step way for a fresh install to get a config without hunting down the
+    XDG directory. It refuses to clobber an existing file unless you pass
+    ``--force``.
     """
+    if init:
+        try:
+            written = write_starter_config(force=force)
+        except ConfigExistsError as exc:
+            console.print(
+                f"[yellow]\N{WARNING SIGN}  Config already exists at "
+                f"{exc.path}[/yellow]\n"
+                "Edit it directly, or pass [cyan]--force[/cyan] to overwrite "
+                "with a fresh starter file."
+            )
+            raise typer.Exit(code=1) from exc
+        except OSError as exc:
+            console.print(f"[red]Could not write config: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        action = "Overwrote" if force else "Wrote"
+        console.print(
+            f"[green]\N{HEAVY CHECK MARK} {action} starter config:[/green] {written}\n"
+            "Edit it to taste, then check it with [cyan]yak config[/cyan]."
+        )
+        return
+
     cfg = load_config()
 
     if show_path:

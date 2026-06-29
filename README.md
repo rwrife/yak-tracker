@@ -337,11 +337,18 @@ warnings, never crashes).
 ```bash
 yak config          # show effective settings + source
 yak config --path   # just print the config file path
+yak config --init   # write a starter config to that path (--force to overwrite)
 ```
 
+The fastest way to get a config on a fresh install is `yak config --init`: it
+drops a fully-commented starter file at the resolved path (creating the
+directory if needed), with every key set to its default so it changes nothing
+until you edit it. It won't clobber an existing config unless you pass
+`--force`. Prefer to do it by hand? The same content ships in
+[`examples/config.toml`](./examples/config.toml).
+
 The file lives at `~/.config/yak-tracker/config.toml` by default (override with
-`$YAK_TRACKER_CONFIG`, or it honours `$XDG_CONFIG_HOME`). All keys are optional;
-a ready-to-copy starting point ships in [`examples/config.toml`](./examples/config.toml):
+`$YAK_TRACKER_CONFIG`, or it honours `$XDG_CONFIG_HOME`). All keys are optional:
 
 ```toml
 # ~/.config/yak-tracker/config.toml
@@ -396,6 +403,7 @@ yak sessions                   # list time-gapped work sessions ✅
 yak raw                        # dump normalized events (no LLM) ✅
 yak demo                       # a built-in sample day, zero setup ✅
 yak config                     # show resolved configuration ✅
+yak config --init              # write a starter config file ✅
 ```
 
 ## Requirements
