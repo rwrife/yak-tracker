@@ -24,6 +24,8 @@ Recognised keys (all optional)::
     timeout = 60                        # seconds for the Ollama request
     format = "story"                    # default persona for `yak today`
     redact = true                       # scrub secrets/tokens before they leave the box
+    vault_path = "~/notes"              # default dir for `yak today --export md`
+    filename_template = "{date}.md"     # export filename ({date} = YYYY-MM-DD)
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ __all__ = [
     "Config",
     "ConfigExistsError",
     "DEFAULTS",
+    "FILENAME_PLACEHOLDER",
     "STARTER_CONFIG",
     "VALID_FORMATS",
     "default_config_path",
@@ -57,7 +60,13 @@ DEFAULTS: dict[str, object] = {
     "timeout": 60.0,
     "format": "story",
     "redact": True,
+    "vault_path": None,
+    "filename_template": "{date}.md",
 }
+
+# The single placeholder a filename template may contain. Kept here so the
+# config validator and the exporter agree on what `{date}` means.
+FILENAME_PLACEHOLDER = "date"
 
 # Environment variable that can point at an alternate config file (handy for
 # tests and for users who keep dotfiles somewhere non-standard).
@@ -105,6 +114,16 @@ format = "story"
 # is ON by default. Set to false (or pass --no-redact) only if you want the raw
 # commands.
 redact = true
+
+# Default notes vault for `yak today --export md` (~ is expanded). Set this once
+# and you can drop the day's learning log into Obsidian with just
+# `yak today --export md`; --out overrides it per run.
+# vault_path = "~/notes"
+
+# Filename for exported notes. The only placeholder is {date} (YYYY-MM-DD), so
+# the default writes e.g. 2026-06-29.md. Subdirectories are allowed
+# (e.g. "daily/{date}.md") and are created as needed.
+filename_template = "{date}.md"
 """
 
 
@@ -122,6 +141,11 @@ class Config:
         redact: Whether to scrub secrets/tokens from shell commands before they
             reach the LLM prompt or JSON export. On by default; the privacy
             stance is the point.
+        vault_path: Default directory for ``yak today --export md`` (an expanded
+            absolute path), or ``None`` to require ``--out`` per run.
+        filename_template: Filename for exported notes, with a single ``{date}``
+            placeholder (e.g. ``"{date}.md"`` → ``2026-06-29.md``). May contain
+            subdirectories, which are created on export.
         path: The config file that was consulted (whether or not it existed).
         source: Human-readable note on where values came from — surfaced by
             ``yak config`` (e.g. "defaults (no config file)" or the file path).
@@ -136,6 +160,8 @@ class Config:
     timeout: float = 60.0
     format: str = "story"
     redact: bool = True
+    vault_path: Path | None = None
+    filename_template: str = "{date}.md"
     path: Path | None = None
     source: str = "defaults"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -150,6 +176,8 @@ class Config:
         timeout: float | None = None,
         format: str | None = None,
         redact: bool | None = None,
+        vault_path: Path | None = None,
+        filename_template: str | None = None,
     ) -> Config:
         """Return a copy with any non-``None`` CLI overrides applied.
 
@@ -172,6 +200,10 @@ class Config:
             changes["format"] = format
         if redact is not None:
             changes["redact"] = bool(redact)
+        if vault_path is not None:
+            changes["vault_path"] = _expand(vault_path)
+        if filename_template is not None:
+            changes["filename_template"] = filename_template
         return replace(self, **changes) if changes else self
 
 
@@ -265,6 +297,36 @@ def _coerce_repos(raw: object, warnings: list[str]) -> tuple[Path, ...] | None:
     return tuple(_expand(p) for p in raw)
 
 
+def _coerce_path(raw: object, key: str, warnings: list[str]) -> Path | None:
+    """Coerce ``raw`` to a single expanded path, warning on bad input."""
+    if isinstance(raw, str) and raw.strip():
+        return _expand(raw.strip())
+    warnings.append(f"{key!r} should be a non-empty path string; ignoring it")
+    return None
+
+
+def _coerce_template(raw: object, key: str, warnings: list[str]) -> str | None:
+    """Coerce ``raw`` to a filename template, warning on bad input.
+
+    The template must be a non-empty string and may only reference the
+    ``{date}`` placeholder; an unknown placeholder (or a stray brace) would blow
+    up at format-time, so we reject it here and keep the default instead.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        warnings.append(f"{key!r} should be a non-empty string; ignoring it")
+        return None
+    template = raw.strip()
+    try:
+        template.format(**{FILENAME_PLACEHOLDER: "2000-01-01"})
+    except (KeyError, IndexError, ValueError):
+        warnings.append(
+            f"{key!r} may only use the {{{FILENAME_PLACEHOLDER}}} placeholder; "
+            f"got {template!r}, ignoring it"
+        )
+        return None
+    return template
+
+
 def _parse_table(
     data: dict[str, object], warnings: list[str]
 ) -> dict[str, object]:
@@ -308,7 +370,29 @@ def _parse_table(
         if flag is not None:
             values["redact"] = flag
 
-    known = {"repos", "idle_gap", "timeout", "model", "ollama_host", "format", "redact"}
+    if "vault_path" in data:
+        vault = _coerce_path(data["vault_path"], "vault_path", warnings)
+        if vault is not None:
+            values["vault_path"] = vault
+
+    if "filename_template" in data:
+        template = _coerce_template(
+            data["filename_template"], "filename_template", warnings
+        )
+        if template is not None:
+            values["filename_template"] = template
+
+    known = {
+        "repos",
+        "idle_gap",
+        "timeout",
+        "model",
+        "ollama_host",
+        "format",
+        "redact",
+        "vault_path",
+        "filename_template",
+    }
     for unknown in sorted(set(data) - known):
         warnings.append(f"unknown config key {unknown!r}; ignoring it")
 
@@ -330,6 +414,7 @@ def load_config(path: Path | None = None) -> Config:
         timeout=float(DEFAULTS["timeout"]),  # type: ignore[arg-type]
         format=str(DEFAULTS["format"]),
         redact=bool(DEFAULTS["redact"]),
+        filename_template=str(DEFAULTS["filename_template"]),
         path=cfg_path,
     )
 

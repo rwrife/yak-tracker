@@ -207,6 +207,11 @@ def test_starter_config_round_trips_to_defaults(tmp_path: Path) -> None:
     assert cfg.timeout == DEFAULTS["timeout"]
     assert cfg.format == DEFAULTS["format"]
     assert cfg.redact == DEFAULTS["redact"]
+    # vault_path is commented out in the starter (no sensible default path), so
+    # it stays unset; filename_template ships at its default.
+    assert cfg.vault_path is None
+    assert cfg.vault_path == DEFAULTS["vault_path"]
+    assert cfg.filename_template == DEFAULTS["filename_template"]
     # repos is commented out in the starter, so it stays at the default (empty).
     assert cfg.repos == ()
 
