@@ -36,6 +36,7 @@ yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
 yak week                  # a week of rabbit holes as a depth heatmap
 yak score                 # a single 0–100 focus score for today
+yak blame path/to/file    # why one file kept pulling you back
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
 yak config      # show the resolved configuration
@@ -363,6 +364,33 @@ otherwise focused day; a day with no sessions at all has *no* score (it shows as
 a quiet day rather than a misleading `100`). As reference points: one shallow
 one-level detour lands around **77**, a couple of moderate tangents around
 **59**, and a genuinely gnarly afternoon (avg ≈ 3, deepest ≈ 6) around **45**.
+
+## `yak blame` — per-file detour reflection
+
+Where `yak today` answers *what was my day*, **`yak blame <file>`** answers
+*what was the deal with **this one file***. Point it at a path and it
+reconstructs every detour that touched the file — the git commits that modified
+it (following renames) plus the shell commands that referenced it — groups the
+matches into sessions, and headlines the churn (*"cli.py — touched in 4 sessions
+across 3 detours"*). A local Ollama then narrates one paragraph on **why this
+file kept pulling you back**, degrading gracefully to the raw timeline when
+Ollama isn't reachable.
+
+```bash
+yak blame yak_tracker/cli.py            # the churn story for one file
+yak blame src/app.py --since 7          # widen the window to the last 7 days
+yak blame src/app.py --repo ~/code/app  # point yak at the repo that owns it
+yak blame src/app.py --no-shell         # git commits only (skip shell refs)
+yak blame src/app.py --no-llm           # raw timeline, no narration
+yak blame src/app.py --json             # machine-readable churn (implies --no-llm)
+```
+
+The timeline is a per-session tree: 📦 marks a commit that modified the file,
+`>` marks a shell command that referenced it. `--json` emits
+`{path, relpath, repo, touch_count, session_count, sessions[]}` for scripting.
+A path outside every tracked repo fails cleanly with a hint to pass `--repo`;
+like the rest of yak, collection is 100% local and only a summarised outline is
+sent to your own Ollama.
 
 ## `yak config` — settings & defaults
 

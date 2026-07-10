@@ -35,6 +35,8 @@ __all__ = [
     "build_outline",
     "build_prompt",
     "narrate",
+    "narrate_blame",
+    "build_blame_outline",
     "PERSONAS",
 ]
 
@@ -94,6 +96,86 @@ class Narration:
     format: str
     model: str
     notice: str | None = None
+
+
+# System framing for `yak blame`: one paragraph on why a single file kept
+# pulling the developer back. Reuses the same low-temperature, outline-only
+# stance as the day personas.
+_BLAME_PERSONA = (
+    "You are a wry engineering narrator. Using ONLY the per-file activity "
+    "outline below, write ONE short paragraph explaining why this single file "
+    "kept pulling the developer back — the churn, the detours, the re-visits. "
+    "Be concrete and a little dry; do not invent commands or facts not in the "
+    "outline. No preamble, no bullet points."
+)
+
+
+def build_blame_outline(blame, *, date_label: str | None = None) -> str:
+    """Serialise a :class:`~yak_tracker.blame.Blame` into a compact text outline.
+
+    One block per session, each listing the events that touched the file with a
+    short source tag (git touch vs shell reference). Deterministic so tests can
+    assert on it and repeated runs stay stable.
+    """
+    if not blame.sessions:
+        return "(no recorded activity touched this file)"
+
+    header = f"File: {blame.resolution.relpath.as_posix()} (repo {blame.resolution.label})"
+    if date_label:
+        header += f" for {date_label}"
+    header += f"\n{blame.headline}"
+
+    blocks: list[str] = []
+    for i, session in enumerate(blame.sessions, start=1):
+        start = session.start.strftime("%H:%M")
+        lines = [f"Session {i} (started {start}) \u2014 {session.count} touch(es):"]
+        for ev in session.events:
+            when = ev.ts.strftime("%H:%M") if ev.ts else "--:--"
+            kind = "git" if ev.source.startswith("git-touch") else "shell"
+            lines.append(f"  - [{when}] ({kind}) {ev.cmd}")
+        blocks.append("\n".join(lines))
+
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
+def narrate_blame(
+    blame,
+    *,
+    model: str = "llama3",
+    host: str = "http://localhost:11434",
+    timeout: float = 60.0,
+    date_label: str | None = None,
+    client: httpx.Client | None = None,
+) -> Narration:
+    """Narrate a per-file :class:`~yak_tracker.blame.Blame` with local Ollama.
+
+    Same graceful-degradation contract as :func:`narrate`: any failure (Ollama
+    down, timeout, HTTP error, empty response) is caught and returned as a
+    :class:`Narration` with ``ok=False`` plus an explanatory ``notice``, so the
+    caller can fall back to the raw timeline. Never raises for a bad server.
+    """
+    if not blame.sessions:
+        return Narration(
+            ok=False,
+            text=None,
+            format="blame",
+            model=model,
+            notice="nothing to narrate (no events touched this file)",
+        )
+
+    outline = build_blame_outline(blame, date_label=date_label)
+    prompt = (
+        f"{_BLAME_PERSONA}\n\n--- FILE ACTIVITY OUTLINE ---\n{outline}\n"
+        "--- END OUTLINE ---\n"
+    )
+    return _ollama_generate(
+        prompt,
+        fmt="blame",
+        model=model,
+        host=host,
+        timeout=timeout,
+        client=client,
+    )
 
 
 def _render_node(node: Node, depth: int, lines: list[str]) -> None:
@@ -201,6 +283,31 @@ def narrate(
             notice="nothing to narrate (no sessions for this day)",
         )
 
+    return _ollama_generate(
+        prompt,
+        fmt=fmt,
+        model=model,
+        host=host,
+        timeout=timeout,
+        client=client,
+    )
+
+
+def _ollama_generate(
+    prompt: str,
+    *,
+    fmt: str,
+    model: str,
+    host: str,
+    timeout: float,
+    client: httpx.Client | None = None,
+) -> Narration:
+    """POST ``prompt`` to Ollama ``/api/generate`` and wrap the result.
+
+    Shared by :func:`narrate` and :func:`narrate_blame`. Any failure is caught
+    and returned as a :class:`Narration` with ``ok=False`` and an explanatory
+    ``notice``; this never raises for an unreachable or misbehaving server.
+    """
     url = host.rstrip("/") + "/api/generate"
     payload = {
         "model": model,
