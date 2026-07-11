@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree as RichTree
 
+from .blame import Blame
 from .models import Event
 from .narrate import Narration
 from .score import DayScore, ScoreHistory, sparkline
@@ -463,3 +464,48 @@ def render_narration(
     if title:
         console.print(f"[bold]{title}[/bold]")
     console.print(panel)
+
+
+# --- yak blame (per-file detour reflection) --------------------------------
+
+
+def blame_timeline(blame: Blame, *, title: str | None = None) -> RichTree:
+    """Build a rich tree: one branch per session, each listing file touches.
+
+    Git touches and shell references get distinct glyphs so the churn reads at a
+    glance (was it commits, or editor/test churn?).
+    """
+    root_label = title or f"\N{OX} {blame.headline}"
+    tree = RichTree(f"[bold]{root_label}[/bold]")
+    for i, session in enumerate(blame.sessions, start=1):
+        same_day = session.start.date() == session.end.date()
+        start = session.start.strftime("%Y-%m-%d %H:%M")
+        end = session.end.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M")
+        branch = tree.add(
+            f"[cyan]Session {i}[/cyan] "
+            f"[dim]{start} → {end} · {session.count} touch"
+            f"{'es' if session.count != 1 else ''}[/dim]"
+        )
+        for ev in session.events:
+            when = ev.ts.strftime("%H:%M") if ev.ts else "—"
+            if ev.source.startswith("git-touch"):
+                glyph, style = "\N{PACKAGE} ", "yellow"
+            else:
+                glyph, style = "\N{GREATER-THAN SIGN} ", "white"
+            branch.add(f"[dim]{when}[/dim] [{style}]{glyph}{ev.cmd}[/{style}]")
+    return tree
+
+
+def render_blame(
+    blame: Blame,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No activity touched this file.",
+) -> None:
+    """Print the per-file churn timeline, or a friendly note when it's empty."""
+    console = console or Console()
+    if not blame.sessions:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+    console.print(blame_timeline(blame, title=title))

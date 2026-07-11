@@ -14,15 +14,19 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from . import __version__
+from .blame import BlameError, blame_to_dict, build_blame
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
 from .export import ExportError, write_export
 from .narrate import narrate as narrate_forest
+from .narrate import narrate_blame
 from .render import (
+    render_blame,
     render_events,
     render_narration,
     render_score,
@@ -546,6 +550,184 @@ def today(
                 empty_message=empty_message,
                 day_score=day_score,
             )
+
+
+@app.command()
+def blame(
+    file: str = typer.Argument(
+        ...,
+        help="File to blame (relative or absolute). Must live under a tracked repo.",
+    ),
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Day whose shell history to scan (YYYY-MM-DD). Defaults to today.",
+    ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help=(
+            "Scan shell history across the last N days ending at --date, and "
+            "widen the git lookback to match. Defaults to a single day / 60 days "
+            "of git history."
+        ),
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Tracked repo to resolve the file against (repeatable). Defaults to config or cwd.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Accepted for symmetry with other commands; blame always narrates a single summary.",
+    ),
+    idle_gap: float = typer.Option(
+        None,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        help="Ollama model to narrate with. Overrides config.",
+    ),
+    ollama_host: str = typer.Option(
+        None,
+        "--ollama-host",
+        help="Base URL of the local Ollama server. Overrides config.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the per-file churn as JSON (implies --no-llm).",
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Skip Ollama narration; print the raw timeline only.",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip shell references; blame git commits only.",
+    ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
+) -> None:
+    """Reconstruct why one file kept pulling you back — its per-file detour story.
+
+    Where ``yak today`` answers *what was my day*, ``yak blame <file>`` answers
+    *what was the deal with **this one file***. It walks the same normalized event
+    stream — the git commits that modified the file (following renames) plus the
+    shell commands that referenced it — buckets the matches into sessions, and
+    renders a compact timeline headlined by how many sessions and detours touched
+    it (e.g. *"cli.py — touched in 4 sessions across 3 detours"*).
+
+    A local Ollama then narrates the churn in one paragraph ("why this file kept
+    pulling you back"), degrading gracefully to the raw timeline if Ollama isn't
+    reachable or ``--no-llm`` is set. Use ``--json`` for a machine-readable
+    structure, ``--since N`` to widen the window, and ``--repo`` to point yak at
+    the repo that owns the file.
+    """
+    if fmt is not None and fmt not in VALID_FORMATS:
+        raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    end = _parse_date(date_str)
+    days = _date_range(end, since)
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        model=model,
+        ollama_host=ollama_host,
+        redact=False if no_redact else None,
+    )
+
+    # Gather the shell events across the requested window (unless --no-shell).
+    shell_events: list = []
+    if not no_shell:
+        for day in days:
+            shell_events += shell_collector.collect_for_date(
+                day,
+                shell=shell,
+                path=histfile,
+                redact=config.redact,
+            )
+
+    # Widen the git lookback to at least cover --since days.
+    git_since = f"{max(since or 1, 60)}.days.ago"
+
+    try:
+        result = build_blame(
+            file,
+            repos=list(config.repos) if config.repos else None,
+            shell_events=None if no_shell else shell_events,
+            since=git_since,
+            idle_gap=config.idle_gap,
+        )
+    except BlameError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if as_json:
+        console.print_json(json.dumps(blame_to_dict(result), ensure_ascii=False))
+        return
+
+    title = f"\N{OX} {result.headline}"
+    empty_message = (
+        f"Nothing touched {result.resolution.relpath.as_posix()} in range. "
+        "(No commits modified it and no shell commands referenced it — try "
+        "--since N to widen the window, or --repo if it lives elsewhere.)"
+    )
+
+    if not result.sessions or no_llm:
+        render_blame(
+            result, console=console, title=title, empty_message=empty_message
+        )
+        return
+
+    narration = narrate_blame(
+        result,
+        model=config.model,
+        host=config.ollama_host,
+        timeout=config.timeout,
+        date_label=end.isoformat(),
+    )
+
+    render_blame(result, console=console, title=title, empty_message=empty_message)
+    if narration.ok:
+        console.print()
+        console.print(
+            Panel(
+                (narration.text or "").strip(),
+                title="[bold]\N{OX} Why this file kept pulling you back[/bold]",
+                subtitle=f"[dim]{narration.model}[/dim]",
+                border_style="magenta",
+                padding=(1, 2),
+            )
+        )
+    elif narration.notice:
+        console.print(f"\n[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]")
 
 
 @app.command()
