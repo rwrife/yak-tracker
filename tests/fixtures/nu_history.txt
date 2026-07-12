@@ -1,0 +1,4 @@
+cd ~/projects/login
+git status
+npm install
+git commit -m "next day"

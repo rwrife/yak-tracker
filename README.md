@@ -116,11 +116,32 @@ Timestamps appear when the history format records them:
 
 - **zsh** with `setopt EXTENDED_HISTORY` (the `: <epoch>:<elapsed>;cmd` format).
 - **bash** with `HISTTIMEFORMAT` set (bash writes `#<epoch>` lines).
+- **fish** — every entry in `fish_history` carries a first-class `when:` epoch,
+  so fish always has real per-command timestamps (and `cwd` when fish recorded
+  `paths:`).
+- **nushell** with the **SQLite** history backend (`history.sqlite3`), which
+  stores `command_line`, `cwd` **and** `start_timestamp`. Nushell's plaintext
+  `history.txt` backend has no timestamps.
 
 Plain bash history has no timestamps, so date-filtering can't apply — use
 `--include-undated` to dump everything. Multi-line commands are stitched back
 together, and the collector degrades gracefully (prints a friendly note) when no
 history file is found.
+
+### Supported shells
+
+Beyond bash and zsh, `yak today`, `yak sessions`, and `yak blame` now also
+auto-detect **fish** and **nushell** history and merge every shell into one
+time-ordered stream — no flags needed:
+
+- **fish**: `$XDG_DATA_HOME/fish/fish_history` (default
+  `~/.local/share/fish/fish_history`).
+- **nushell**: `$XDG_CONFIG_HOME/nushell/` (default `~/.config/nushell/`),
+  preferring `history.sqlite3` over `history.txt` when both exist.
+
+Shells you don't use are silently skipped — if fish or nushell isn't installed,
+those collectors simply contribute nothing and never error. (`yak raw` remains
+focused on a single bash/zsh file; `--histfile` still targets exactly that file.)
 
 ## `yak sessions` — git collector + sessionizer
 

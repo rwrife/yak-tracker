@@ -19,6 +19,7 @@ from rich.table import Table
 
 from . import __version__
 from .blame import BlameError, blame_to_dict, build_blame
+from .collectors import collect_extra_shells_for_date
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
@@ -186,6 +187,10 @@ def _collect_day_events(
             path=histfile,
             redact=redact,
         )
+        # Also pick up fish + nushell from their own auto-detected history
+        # files (unless the user pinned an explicit --histfile to parse).
+        if histfile is None:
+            collected += collect_extra_shells_for_date(target, redact=redact)
     if not no_git:
         repo_paths = list(repos) if repos else [Path.cwd()]
         git_events = git_collector.collect(repo_paths)
@@ -674,6 +679,10 @@ def blame(
                 path=histfile,
                 redact=config.redact,
             )
+            if histfile is None:
+                shell_events += collect_extra_shells_for_date(
+                    day, redact=config.redact
+                )
 
     # Widen the git lookback to at least cover --since days.
     git_since = f"{max(since or 1, 60)}.days.ago"
