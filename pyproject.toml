@@ -31,9 +31,13 @@ Repository = "https://github.com/rwrife/yak-tracker"
 yak = "yak_tracker.cli:app"
 
 [project.optional-dependencies]
+tui = [
+    "textual>=0.60",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "textual>=0.60",
 ]
 
 [build-system]

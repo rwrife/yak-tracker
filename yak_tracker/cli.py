@@ -558,6 +558,152 @@ def today(
 
 
 @app.command()
+def tui(
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Day to explore (YYYY-MM-DD). Defaults to today.",
+    ),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help=(
+            "Narration persona shown first: standup, story, or learning. "
+            "Defaults to the configured format. Press 'f' in the TUI to cycle."
+        ),
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to config or cwd.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        None,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        help="Ollama model to narrate with. Overrides config.",
+    ),
+    ollama_host: str = typer.Option(
+        None,
+        "--ollama-host",
+        help="Base URL of the local Ollama server. Overrides config.",
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Skip Ollama narration; the footer shows the raw outline instead.",
+    ),
+    no_git: bool = typer.Option(
+        False,
+        "--no-git",
+        help="Skip the git collector (shell history only).",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip the shell collector (git activity only).",
+    ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
+) -> None:
+    """Explore the day's yak-shaving tree in an interactive TUI.
+
+    Runs the exact same pipeline as ``yak today`` (shell + git → sessions →
+    trees) but hands the forest to a `textual` app instead of a static render.
+    Collapse/expand any session or detour with the arrow keys / Enter, press
+    ``e``/``c`` to expand/collapse everything, and ``f`` to cycle the footer
+    summary between the standup/story/learning personas. ``q`` quits.
+
+    The footer summary honours ``--format`` for the persona shown first. When a
+    local Ollama is reachable it narrates that persona; the other personas (and
+    everything when ``--no-llm`` or Ollama is down) fall back to a deterministic
+    outline so the TUI always has something to show — offline included.
+
+    ``textual`` is an optional extra; install it with
+    ``pip install 'yak-tracker[tui]'`` if ``yak tui`` reports it missing.
+    """
+    from .narrate import build_outline
+    from .tui import ForestView, TuiUnavailableError, run_tui
+
+    if fmt is not None and fmt not in VALID_FORMATS:
+        raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    target = _parse_date(date_str)
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        model=model,
+        ollama_host=ollama_host,
+        format=fmt,
+        redact=False if no_redact else None,
+    )
+
+    collected = _collect_day_events(
+        target,
+        repos=list(config.repos) if config.repos else None,
+        shell=shell,
+        histfile=histfile,
+        no_git=no_git,
+        no_shell=no_shell,
+        redact=config.redact,
+    )
+    day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+    forest = build_forest(day_sessions)
+
+    # Deterministic outline is the always-available footer fallback for every
+    # persona (and the whole footer when offline / --no-llm).
+    outline = build_outline(forest, date_label=target.isoformat())
+    summaries: dict[str, str] = {f: outline for f in VALID_FORMATS}
+
+    # Try to narrate the selected persona so the footer opens on real prose;
+    # any failure (Ollama down, empty) silently leaves the outline fallback.
+    if forest and not no_llm:
+        narration = narrate_forest(
+            forest,
+            fmt=config.format,
+            model=config.model,
+            host=config.ollama_host,
+            timeout=config.timeout,
+            date_label=target.isoformat(),
+        )
+        if narration.ok and narration.text:
+            summaries[config.format] = narration.text
+
+    view = ForestView(
+        forest=forest,
+        day=target,
+        summaries=summaries,
+        fmt=config.format,
+    )
+    try:
+        run_tui(view)
+    except TuiUnavailableError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command()
 def blame(
     file: str = typer.Argument(
         ...,
