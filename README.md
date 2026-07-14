@@ -34,6 +34,7 @@ yak demo                  # see a sample day instantly — no setup needed
 yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
+yak tui                   # explore the tree interactively (collapse/expand)
 yak week                  # a week of rabbit holes as a depth heatmap
 yak score                 # a single 0–100 focus score for today
 yak blame path/to/file    # why one file kept pulling you back
@@ -284,6 +285,57 @@ narrated: true
 tags: [yak-tracker]
 ---
 ```
+
+## `yak tui` — explore the tree interactively
+
+The static `yak today` render is perfect for a glance, but a deep day — every
+detour expanded — is a wall of text. **`yak tui`** hands the *same* yak-shaving
+forest to an interactive [textual](https://textual.textualize.io/) app you can
+actually sit in: collapse the sessions you don't care about, expand the one
+rabbit hole you do, and cycle the footer summary between personas live.
+
+```bash
+yak tui                          # explore today
+yak tui --date 2026-06-17        # a specific day (YYYY-MM-DD)
+yak tui --format standup         # open the footer on the standup persona
+yak tui --repo ~/code/app -r ~/code/lib   # include several repos
+yak tui --no-llm                 # skip Ollama; footer shows the raw outline
+yak tui --idle-gap 15            # split sessions on 15-min gaps (default 25)
+```
+
+**Keys:**
+
+- `↑`/`↓` + `Enter` — move and collapse/expand a single node
+- `e` / `c` — expand / collapse everything
+- `f` — cycle the footer summary (`standup` → `story` → `learning`)
+- `q` — quit
+
+The footer honours `--format` for the persona shown first. When a local Ollama
+is reachable it narrates that persona; the others (and everything under
+`--no-llm` or when Ollama is down) fall back to a deterministic outline, so the
+TUI always has something to show — offline included. Empty days render a
+friendly *"no sessions for this day"* leaf rather than a blank screen.
+
+> 📸 *Asciinema/screenshot: launch `yak demo` in one pane, then `yak tui` in
+> another to record the collapse/expand flow.* (A recording lives in the
+> project's media once captured.)
+
+### Optional extra
+
+`textual` is **not** pulled in by the lean core install. Add it with the `tui`
+extra:
+
+```bash
+pip install 'yak-tracker[tui]'
+# or, from a checkout:
+uv sync --extra tui
+```
+
+If you run `yak tui` without it, yak tells you exactly that instead of crashing.
+
+Like `yak week` and `yak score`, the TUI shares the **exact same pipeline** as
+`yak today` (shell + git → sessions → trees), so what you explore is what you'd
+have narrated.
 
 ## `yak week` — weekly tangent heatmap
 

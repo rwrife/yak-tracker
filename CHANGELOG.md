@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`yak tui`** — explore the yak-shaving forest in an interactive
+  [textual](https://textual.textualize.io/) app instead of the static render.
+  Collapse/expand any session or detour (`e`/`c` to do it wholesale), and cycle
+  the footer summary between the `standup`/`story`/`learning` personas with `f`.
+  Runs the **same pipeline** as `yak today` and honours `--date`, `--repo`,
+  `--format`, `--idle-gap`, and `--no-llm`; the footer narrates via Ollama when
+  reachable and falls back to a deterministic outline otherwise (offline
+  included). Empty days render a friendly leaf. `textual` is an **optional**
+  dependency — install it with `pip install 'yak-tracker[tui]'`; running `yak
+  tui` without it prints an actionable hint rather than a traceback. (#31)
 - **`yak today --export md`** — write a day straight into an Obsidian / daily-
   notes vault as a dated `YYYY-MM-DD.md`. The file carries **YAML front-matter**
   (date, the day's **yak score**, session and max-detour-depth counts, body
