@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pluggable LLM backends** — narration is no longer hard-wired to Ollama. A
+  new `NarrationBackend` protocol backs two implementations: the existing
+  `ollama` backend (default) and an `openai_compat` backend that hits any
+  OpenAI-compatible `/v1/chat/completions` endpoint (LM Studio, `llama.cpp`
+  server, local proxies). Select via config (`backend`, `llm_base_url`) or the
+  new `--backend` / `--llm-base-url` flags on `yak today`, `yak tui`, and `yak
+  blame`. `openai_compat` reads an optional bearer token from
+  `$YAK_LLM_API_KEY` (sent only as an `Authorization` header, never logged or
+  stored). The graceful raw-tree fallback is preserved for every backend, and
+  the README warns that a non-local endpoint breaks the privacy guarantee. (#33)
 - **`yak tui`** — explore the yak-shaving forest in an interactive
   [textual](https://textual.textualize.io/) app instead of the static render.
   Collapse/expand any session or detour (`e`/`c` to do it wholesale), and cycle

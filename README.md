@@ -184,8 +184,10 @@ yak today --format standup        # terse, shippable bullets for the sync
 yak today --format story          # the funny rabbit-hole saga
 yak today --format learning       # what you learned (fight skill rot)
 yak today --no-llm                # skip Ollama; print the raw tree only
-yak today --model mistral         # pick the Ollama model (overrides config)
+yak today --model mistral         # pick the model (overrides config)
 yak today --ollama-host http://box:11434   # point at a remote Ollama
+yak today --backend openai_compat # narrate via an OpenAI-compatible endpoint
+yak today --llm-base-url http://localhost:1234/v1  # LM Studio / llama.cpp server
 yak today --date 2026-06-17       # a specific day (YYYY-MM-DD)
 yak today --since 7               # the last 7 days, oldest first
 yak today --json                  # machine-readable forest (for scripting)
@@ -208,6 +210,48 @@ always get something useful.
   shared-utils to build some Rust. Classic.
 ─────────────────────────────────────────────── llama3 ───
 ```
+
+### Pluggable LLM backends
+
+Ollama is the default, but the LLM seam is swappable. Point `yak` at any
+**OpenAI-compatible** `/v1/chat/completions` endpoint — **LM Studio**, a
+**`llama.cpp` server**, or a local proxy — with the `openai_compat` backend:
+
+```bash
+# LM Studio (default local server port)
+yak today --backend openai_compat --llm-base-url http://localhost:1234/v1 --model your-model
+
+# llama.cpp server
+yak today --backend openai_compat --llm-base-url http://localhost:8080/v1
+```
+
+Or set it once in config (`yak config`):
+
+```toml
+backend      = "openai_compat"
+llm_base_url = "http://localhost:1234/v1"
+model        = "your-model"
+```
+
+| Backend | Endpoint | Base URL default | Works with |
+| --- | --- | --- | --- |
+| `ollama` (default) | `/api/generate` | `http://localhost:11434` (or `ollama_host`) | Ollama |
+| `openai_compat` | `/v1/chat/completions` | `http://localhost:1234/v1` | LM Studio, llama.cpp server, local proxies, any OpenAI-compatible API |
+
+**API key (optional):** `openai_compat` reads a bearer token from the
+`YAK_LLM_API_KEY` environment variable and sends it only as an `Authorization`
+header — it is never written to config or logged. Leave it unset for local
+servers that don't need auth.
+
+> ⚠️ **Privacy warning:** pointing `openai_compat` at a **non-local** endpoint
+> (a hosted API on the internet) sends your narrated outline off your machine
+> and **breaks yak-tracker's local-first privacy guarantee**. Keep the base URL
+> on `localhost`/your LAN to stay private. The default Ollama backend never
+> leaves the box.
+
+Either way, the graceful-degradation contract holds: if the chosen backend is
+unreachable, `yak` prints a short notice and falls back to the raw structured
+tree.
 
 Under the narration, the tree itself is built with simple, explainable
 heuristics:
@@ -492,8 +536,10 @@ The file lives at `~/.config/yak-tracker/config.toml` by default (override with
 # ~/.config/yak-tracker/config.toml
 repos       = ["~/code/yak-tracker", "~/code/other"]  # default scan targets
 idle_gap    = 25                       # minutes; new session after this gap
-model       = "llama3"                 # Ollama model for narration
-ollama_host = "http://localhost:11434" # where Ollama lives
+model       = "llama3"                 # LLM model for narration
+backend     = "ollama"                 # "ollama" or "openai_compat"
+ollama_host = "http://localhost:11434" # where Ollama lives (ollama backend)
+# llm_base_url = "http://localhost:1234/v1"  # override backend base URL
 timeout     = 60                       # seconds before falling back
 format      = "story"                  # default `yak today` persona
 redact      = true                     # scrub secrets before they leave the box

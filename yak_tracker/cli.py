@@ -24,8 +24,8 @@ from .collectors import git as git_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
 from .export import ExportError, write_export
+from .narrate import make_backend, narrate_blame
 from .narrate import narrate as narrate_forest
-from .narrate import narrate_blame
 from .render import (
     render_blame,
     render_events,
@@ -94,6 +94,22 @@ def _parse_date(value: str | None) -> date:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise typer.BadParameter("date must be in YYYY-MM-DD format") from exc
+
+
+def _backend_for(config):
+    """Build the narration backend selected by ``config``.
+
+    Centralises backend construction so every narrating command (today,
+    sessions, blame) wires config the same way. Honours the selected backend,
+    its resolved base URL, model, and timeout; the openai_compat backend reads
+    its API key from $YAK_LLM_API_KEY itself.
+    """
+    return make_backend(
+        backend=config.backend,
+        model=config.model,
+        base_url=config.resolved_base_url(),
+        timeout=config.timeout,
+    )
 
 
 def _date_range(end: date, since: int | None) -> list[date]:
@@ -339,6 +355,19 @@ def today(
         "--ollama-host",
         help="Base URL of the local Ollama server. Overrides config.",
     ),
+    backend: str = typer.Option(
+        None,
+        "--backend",
+        help=(
+            "Narration backend: 'ollama' or 'openai_compat' (LM Studio / "
+            "llama.cpp server / OpenAI-compatible). Overrides config."
+        ),
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Base URL for the narration backend. Overrides config/--ollama-host.",
+    ),
     as_json: bool = typer.Option(
         False,
         "--json",
@@ -437,6 +466,8 @@ def today(
         repos=list(repos) if repos else None,
         model=model,
         ollama_host=ollama_host,
+        backend=backend,
+        llm_base_url=llm_base_url,
         format=fmt,
         redact=False if no_redact else None,
         filename_template=template,
@@ -477,8 +508,7 @@ def today(
                 narration = narrate_forest(
                     forest,
                     fmt=config.format,
-                    model=config.model,
-                    host=config.ollama_host,
+                    backend=_backend_for(config),
                     timeout=config.timeout,
                     date_label=day.isoformat(),
                 )
@@ -535,8 +565,7 @@ def today(
         narration = narrate_forest(
             forest,
             fmt=config.format,
-            model=config.model,
-            host=config.ollama_host,
+            backend=_backend_for(config),
             timeout=config.timeout,
             date_label=day.isoformat(),
         )
@@ -607,6 +636,16 @@ def tui(
         "--ollama-host",
         help="Base URL of the local Ollama server. Overrides config.",
     ),
+    backend: str = typer.Option(
+        None,
+        "--backend",
+        help="Narration backend: 'ollama' or 'openai_compat'. Overrides config.",
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Base URL for the narration backend. Overrides config/--ollama-host.",
+    ),
     no_llm: bool = typer.Option(
         False,
         "--no-llm",
@@ -656,6 +695,8 @@ def tui(
         repos=list(repos) if repos else None,
         model=model,
         ollama_host=ollama_host,
+        backend=backend,
+        llm_base_url=llm_base_url,
         format=fmt,
         redact=False if no_redact else None,
     )
@@ -683,8 +724,7 @@ def tui(
         narration = narrate_forest(
             forest,
             fmt=config.format,
-            model=config.model,
-            host=config.ollama_host,
+            backend=_backend_for(config),
             timeout=config.timeout,
             date_label=target.isoformat(),
         )
@@ -765,6 +805,16 @@ def blame(
         "--ollama-host",
         help="Base URL of the local Ollama server. Overrides config.",
     ),
+    backend: str = typer.Option(
+        None,
+        "--backend",
+        help="Narration backend: 'ollama' or 'openai_compat'. Overrides config.",
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Base URL for the narration backend. Overrides config/--ollama-host.",
+    ),
     as_json: bool = typer.Option(
         False,
         "--json",
@@ -812,6 +862,8 @@ def blame(
         repos=list(repos) if repos else None,
         model=model,
         ollama_host=ollama_host,
+        backend=backend,
+        llm_base_url=llm_base_url,
         redact=False if no_redact else None,
     )
 
@@ -863,8 +915,7 @@ def blame(
 
     narration = narrate_blame(
         result,
-        model=config.model,
-        host=config.ollama_host,
+        backend=_backend_for(config),
         timeout=config.timeout,
         date_label=end.isoformat(),
     )
@@ -1242,7 +1293,9 @@ def config_cmd(
     table.add_row("repos", repos_display)
     table.add_row("idle_gap", f"{cfg.idle_gap:g} min")
     table.add_row("model", cfg.model)
+    table.add_row("backend", cfg.backend)
     table.add_row("ollama_host", cfg.ollama_host)
+    table.add_row("llm_base_url", cfg.resolved_base_url() or "[dim](backend default)[/dim]")
     table.add_row("timeout", f"{cfg.timeout:g} s")
     table.add_row("format", cfg.format)
     table.add_row("redact", "on" if cfg.redact else "[red]off[/red]")

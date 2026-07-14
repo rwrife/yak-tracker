@@ -19,8 +19,10 @@ Recognised keys (all optional)::
     # ~/.config/yak-tracker/config.toml
     repos = ["~/code/yak-tracker", "~/code/other"]
     idle_gap = 25                       # minutes; new session after this gap
-    model = "llama3"                    # Ollama model name
+    model = "llama3"                    # LLM model name
+    backend = "ollama"                  # "ollama" or "openai_compat"
     ollama_host = "http://localhost:11434"
+    llm_base_url = "http://localhost:1234/v1"  # override backend base URL
     timeout = 60                        # seconds for the Ollama request
     format = "story"                    # default persona for `yak today`
     redact = true                       # scrub secrets/tokens before they leave the box
@@ -51,12 +53,20 @@ __all__ = [
 # both config validation and narration share one source of truth.
 VALID_FORMATS: tuple[str, ...] = ("standup", "story", "learning")
 
+# The narration backends `yak` can drive. "ollama" is the local default; the
+# "openai_compat" backend targets any OpenAI-compatible /v1/chat/completions
+# endpoint (LM Studio, llama.cpp server, local proxies). Kept here so config
+# validation and the backend factory share one source of truth.
+VALID_BACKENDS: tuple[str, ...] = ("ollama", "openai_compat")
+
 # Built-in defaults. Mirrors PLAN.md: local Ollama, 25-minute idle gap.
 DEFAULTS: dict[str, object] = {
     "repos": [],
     "idle_gap": 25.0,
     "model": "llama3",
     "ollama_host": "http://localhost:11434",
+    "backend": "ollama",
+    "llm_base_url": None,
     "timeout": 60.0,
     "format": "story",
     "redact": True,
@@ -97,8 +107,21 @@ idle_gap = 25
 # (e.g. `ollama pull llama3`).
 model = "llama3"
 
+# Narration backend: "ollama" (local, default) or "openai_compat" for any
+# OpenAI-compatible /v1/chat/completions endpoint (LM Studio, llama.cpp server,
+# local proxies). NOTE: pointing openai_compat at a non-local endpoint sends
+# your narration off-box and breaks the privacy guarantee.
+backend = "ollama"
+
+# Base URL for the narration backend. When unset, ollama uses ollama_host below
+# and openai_compat uses http://localhost:1234/v1. Set this to override, e.g.
+# llm_base_url = "http://localhost:8080/v1"  # llama.cpp server
+# (openai_compat reads an optional API key from $YAK_LLM_API_KEY; never store
+# secrets in this file.)
+# llm_base_url = "http://localhost:1234/v1"
+
 # Where your local Ollama server lives. Point this at another box to use a
-# remote Ollama on your LAN.
+# remote Ollama on your LAN. (Used only by the "ollama" backend.)
 ollama_host = "http://localhost:11434"
 
 # Seconds to wait for Ollama before giving up and falling back to the raw tree.
@@ -157,6 +180,8 @@ class Config:
     idle_gap: float = 25.0
     model: str = "llama3"
     ollama_host: str = "http://localhost:11434"
+    backend: str = "ollama"
+    llm_base_url: str | None = None
     timeout: float = 60.0
     format: str = "story"
     redact: bool = True
@@ -173,6 +198,8 @@ class Config:
         repos: list[Path] | None = None,
         model: str | None = None,
         ollama_host: str | None = None,
+        backend: str | None = None,
+        llm_base_url: str | None = None,
         timeout: float | None = None,
         format: str | None = None,
         redact: bool | None = None,
@@ -194,6 +221,10 @@ class Config:
             changes["model"] = model
         if ollama_host is not None:
             changes["ollama_host"] = ollama_host
+        if backend is not None:
+            changes["backend"] = backend
+        if llm_base_url is not None:
+            changes["llm_base_url"] = llm_base_url
         if timeout is not None:
             changes["timeout"] = float(timeout)
         if format is not None:
@@ -205,6 +236,20 @@ class Config:
         if filename_template is not None:
             changes["filename_template"] = filename_template
         return replace(self, **changes) if changes else self
+
+    def resolved_base_url(self) -> str | None:
+        """Return the effective base URL for the selected narration backend.
+
+        Precedence: an explicit ``llm_base_url`` (config/CLI) always wins. For
+        the ``ollama`` backend we fall back to the legacy ``ollama_host`` so
+        existing configs keep working. For ``openai_compat`` with nothing set we
+        return ``None`` and let the backend pick its own default.
+        """
+        if self.llm_base_url is not None:
+            return self.llm_base_url
+        if self.backend == "ollama":
+            return self.ollama_host
+        return None
 
 
 def _expand(value: str | os.PathLike[str]) -> Path:
@@ -365,6 +410,22 @@ def _parse_table(
                     f"got {fmt!r}, ignoring it"
                 )
 
+    if "backend" in data:
+        be = _coerce_str(data["backend"], "backend", warnings)
+        if be is not None:
+            if be in VALID_BACKENDS:
+                values["backend"] = be
+            else:
+                warnings.append(
+                    f"'backend' must be one of {', '.join(VALID_BACKENDS)}; "
+                    f"got {be!r}, ignoring it"
+                )
+
+    if "llm_base_url" in data:
+        base_url = _coerce_str(data["llm_base_url"], "llm_base_url", warnings)
+        if base_url is not None:
+            values["llm_base_url"] = base_url
+
     if "redact" in data:
         flag = _coerce_bool(data["redact"], "redact", warnings)
         if flag is not None:
@@ -388,6 +449,8 @@ def _parse_table(
         "timeout",
         "model",
         "ollama_host",
+        "backend",
+        "llm_base_url",
         "format",
         "redact",
         "vault_path",
@@ -411,6 +474,7 @@ def load_config(path: Path | None = None) -> Config:
         idle_gap=float(DEFAULTS["idle_gap"]),  # type: ignore[arg-type]
         model=str(DEFAULTS["model"]),
         ollama_host=str(DEFAULTS["ollama_host"]),
+        backend=str(DEFAULTS["backend"]),
         timeout=float(DEFAULTS["timeout"]),  # type: ignore[arg-type]
         format=str(DEFAULTS["format"]),
         redact=bool(DEFAULTS["redact"]),

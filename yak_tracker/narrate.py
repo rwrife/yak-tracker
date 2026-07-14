@@ -22,16 +22,23 @@ so ``yak today`` always produces *something* useful even offline.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 import httpx
 
-from .config import VALID_FORMATS
+from .config import VALID_BACKENDS, VALID_FORMATS
 from .tree import DetourKind, Node
 
 __all__ = [
     "Narration",
+    "BackendError",
+    "NarrationBackend",
+    "OllamaBackend",
+    "OpenAICompatBackend",
+    "make_backend",
     "build_outline",
     "build_prompt",
     "narrate",
@@ -39,6 +46,15 @@ __all__ = [
     "build_blame_outline",
     "PERSONAS",
 ]
+
+# Environment variable holding the API key for non-Ollama (openai_compat)
+# backends. Read lazily so it is never captured in config or logged; only the
+# Authorization header ever sees it.
+LLM_API_KEY_ENV = "YAK_LLM_API_KEY"
+
+# Low temperature everywhere: we want a faithful retelling of the outline, not
+# creative embellishment that invents commands the user never ran.
+_TEMPERATURE = 0.4
 
 
 # Per-persona system framing. The shared outline (below) is appended to whichever
@@ -98,6 +114,264 @@ class Narration:
     notice: str | None = None
 
 
+class BackendError(Exception):
+    """Raised inside a backend when generation fails in a recoverable way.
+
+    Backends translate transport/HTTP/parse failures into this exception with a
+    user-facing ``notice``. :func:`_generate` catches it and turns it into a
+    :class:`Narration` with ``ok=False`` so the CLI falls back to the raw tree.
+    Backends never leak raw stack traces to the user.
+    """
+
+    def __init__(self, notice: str) -> None:
+        super().__init__(notice)
+        self.notice = notice
+
+
+@runtime_checkable
+class NarrationBackend(Protocol):
+    """The LLM seam: anything that can turn a prompt into prose.
+
+    Implementations own their own transport and model. They must raise
+    :class:`BackendError` (with a friendly ``notice``) on any recoverable
+    failure rather than propagating transport exceptions, and return a
+    non-empty string on success. ``name``/``model`` are used purely for display.
+    """
+
+    name: str
+    model: str
+
+    def generate(self, prompt: str) -> str:
+        """Return narrated prose for ``prompt`` or raise :class:`BackendError`."""
+        ...
+
+
+class OllamaBackend:
+    """Narrate via a local **Ollama** server (``/api/generate``).
+
+    The historical default and the privacy-preserving happy path: talks to
+    ``localhost`` (or a LAN box) and never a cloud API.
+    """
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        *,
+        model: str = "llama3",
+        base_url: str = "http://localhost:11434",
+        timeout: float = 60.0,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url
+        self.timeout = timeout
+        self._client = client
+
+    def generate(self, prompt: str) -> str:
+        url = self.base_url.rstrip("/") + "/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": _TEMPERATURE},
+        }
+        data = _post_json(
+            url,
+            payload,
+            headers=None,
+            timeout=self.timeout,
+            client=self._client,
+            label=f"Ollama at {self.base_url}",
+        )
+        text = (data.get("response") or "").strip() if isinstance(data, dict) else ""
+        if not text:
+            raise BackendError(
+                "Ollama returned an empty narration. Showing the raw tree."
+            )
+        return text
+
+
+class OpenAICompatBackend:
+    """Narrate via any **OpenAI-compatible** ``/v1/chat/completions`` endpoint.
+
+    Works with LM Studio, a ``llama.cpp`` server, or a local proxy. An optional
+    API key is read from ``$YAK_LLM_API_KEY`` at construction and sent only as
+    an ``Authorization`` header — never logged or stored in config.
+
+    Pointing this at a *non-local* endpoint breaks yak-tracker's privacy
+    guarantee; that warning lives in the README, not enforced here.
+    """
+
+    name = "openai_compat"
+
+    def __init__(
+        self,
+        *,
+        model: str = "llama3",
+        base_url: str = "http://localhost:1234/v1",
+        timeout: float = 60.0,
+        api_key: str | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url
+        self.timeout = timeout
+        # Read the key lazily from the env if not injected (tests inject).
+        self._api_key = api_key if api_key is not None else os.environ.get(LLM_API_KEY_ENV)
+        self._client = client
+
+    def generate(self, prompt: str) -> str:
+        url = self.base_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": _TEMPERATURE,
+            "stream": False,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        data = _post_json(
+            url,
+            payload,
+            headers=headers,
+            timeout=self.timeout,
+            client=self._client,
+            label=f"OpenAI-compatible endpoint at {self.base_url}",
+        )
+        text = _extract_chat_text(data)
+        if not text:
+            raise BackendError(
+                "The LLM endpoint returned an empty narration. Showing the raw tree."
+            )
+        return text
+
+
+def _extract_chat_text(data: object) -> str:
+    """Pull the assistant message out of an OpenAI chat-completions response."""
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+    # Some servers echo the legacy completion shape.
+    text = first.get("text")
+    return text.strip() if isinstance(text, str) else ""
+
+
+def _post_json(
+    url: str,
+    payload: dict,
+    *,
+    headers: dict | None,
+    timeout: float,
+    client: httpx.Client | None,
+    label: str,
+) -> object:
+    """POST ``payload`` as JSON and return the decoded body.
+
+    Shared by both backends. Translates every recoverable transport/HTTP/parse
+    failure into a :class:`BackendError` with a friendly, actionable notice so
+    the caller can fall back to the raw tree. Never raises a raw httpx error.
+    """
+    owns_client = client is None
+    client = client or httpx.Client(timeout=timeout)
+    try:
+        resp = client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.ConnectError:
+        raise BackendError(
+            f"could not reach {label} \u2014 is it running? Showing the raw tree instead."
+        ) from None
+    except httpx.TimeoutException:
+        raise BackendError(
+            f"{label} timed out after {timeout:g}s. Showing the raw tree."
+        ) from None
+    except httpx.HTTPStatusError as exc:
+        detail = _http_error_detail(exc.response)
+        raise BackendError(
+            f"{label} returned HTTP {exc.response.status_code}{detail}. "
+            "Showing the raw tree."
+        ) from None
+    except (httpx.HTTPError, ValueError) as exc:
+        raise BackendError(
+            f"{label} response could not be parsed ({exc}). Showing the raw tree."
+        ) from None
+    finally:
+        if owns_client:
+            client.close()
+
+
+def _http_error_detail(response: httpx.Response) -> str:
+    """Best-effort extraction of a JSON ``error`` field for a notice.
+
+    Handles both Ollama's ``{\"error\": \"...\"}`` and OpenAI's nested
+    ``{\"error\": {\"message\": \"...\"}}`` shapes.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    err = body.get("error")
+    if isinstance(err, str) and err.strip():
+        return f" ({err.strip()})"
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str) and msg.strip():
+            return f" ({msg.strip()})"
+    return ""
+
+
+def make_backend(
+    *,
+    backend: str = "ollama",
+    model: str = "llama3",
+    base_url: str | None = None,
+    timeout: float = 60.0,
+    api_key: str | None = None,
+    client: httpx.Client | None = None,
+) -> NarrationBackend:
+    """Construct the narration backend named ``backend``.
+
+    Wires config/CLI selection to a concrete :class:`NarrationBackend`. When
+    ``base_url`` is ``None`` each backend uses its own sensible default
+    (localhost Ollama, or ``localhost:1234/v1`` for openai_compat).
+
+    Raises:
+        ValueError: if ``backend`` is not one of :data:`VALID_BACKENDS`.
+    """
+    if backend == "ollama":
+        return OllamaBackend(
+            model=model,
+            base_url=base_url or "http://localhost:11434",
+            timeout=timeout,
+            client=client,
+        )
+    if backend == "openai_compat":
+        return OpenAICompatBackend(
+            model=model,
+            base_url=base_url or "http://localhost:1234/v1",
+            timeout=timeout,
+            api_key=api_key,
+            client=client,
+        )
+    raise ValueError(
+        f"unknown backend {backend!r}; expected one of {', '.join(VALID_BACKENDS)}"
+    )
+
+
 # System framing for `yak blame`: one paragraph on why a single file kept
 # pulling the developer back. Reuses the same low-temperature, outline-only
 # stance as the day personas.
@@ -146,20 +420,25 @@ def narrate_blame(
     timeout: float = 60.0,
     date_label: str | None = None,
     client: httpx.Client | None = None,
+    backend: NarrationBackend | None = None,
 ) -> Narration:
-    """Narrate a per-file :class:`~yak_tracker.blame.Blame` with local Ollama.
+    """Narrate a per-file :class:`~yak_tracker.blame.Blame` with an LLM backend.
 
-    Same graceful-degradation contract as :func:`narrate`: any failure (Ollama
+    Same graceful-degradation contract as :func:`narrate`: any failure (backend
     down, timeout, HTTP error, empty response) is caught and returned as a
     :class:`Narration` with ``ok=False`` plus an explanatory ``notice``, so the
     caller can fall back to the raw timeline. Never raises for a bad server.
+
+    A concrete ``backend`` may be passed; otherwise an :class:`OllamaBackend`
+    is built from ``model``/``host``/``timeout`` for backward compatibility.
     """
+    backend = backend or OllamaBackend(model=model, base_url=host, timeout=timeout, client=client)
     if not blame.sessions:
         return Narration(
             ok=False,
             text=None,
             format="blame",
-            model=model,
+            model=backend.model,
             notice="nothing to narrate (no events touched this file)",
         )
 
@@ -168,14 +447,7 @@ def narrate_blame(
         f"{_BLAME_PERSONA}\n\n--- FILE ACTIVITY OUTLINE ---\n{outline}\n"
         "--- END OUTLINE ---\n"
     )
-    return _ollama_generate(
-        prompt,
-        fmt="blame",
-        model=model,
-        host=host,
-        timeout=timeout,
-        client=client,
-    )
+    return _generate(prompt, fmt="blame", backend=backend)
 
 
 def _render_node(node: Node, depth: int, lines: list[str]) -> None:
@@ -249,11 +521,12 @@ def narrate(
     timeout: float = 60.0,
     date_label: str | None = None,
     client: httpx.Client | None = None,
+    backend: NarrationBackend | None = None,
 ) -> Narration:
-    """Narrate the tree ``forest`` with a local Ollama model.
+    """Narrate the tree ``forest`` with an LLM backend.
 
-    Sends a persona-framed outline to ``{host}/api/generate`` and returns the
-    model's prose. Any failure — Ollama down, connection refused, timeout, HTTP
+    Sends a persona-framed outline to the selected backend and returns the
+    model's prose. Any failure — backend down, connection refused, timeout, HTTP
     error, empty/garbled response — is caught and turned into a
     :class:`Narration` with ``ok=False`` and an explanatory ``notice`` so the
     caller can fall back to the raw tree. This function never raises for an
@@ -262,134 +535,48 @@ def narrate(
     Args:
         forest: The yak-shaving trees to narrate.
         fmt: Persona/format (``standup`` / ``story`` / ``learning``).
-        model: Ollama model name.
-        host: Base URL of the Ollama server.
+        model: Model name (used to build a default Ollama backend).
+        host: Base URL (used to build a default Ollama backend).
         timeout: Seconds to wait on the request.
         date_label: Optional date string woven into the outline preamble.
         client: Optional pre-built :class:`httpx.Client` (used by tests to mock
-            the transport). When omitted, a short-lived client is created.
+            the transport) for the default Ollama backend.
+        backend: A concrete :class:`NarrationBackend`. When given, it overrides
+            ``model``/``host``/``timeout``/``client``; otherwise an
+            :class:`OllamaBackend` is built from those for backward compat.
     """
+    backend = backend or OllamaBackend(model=model, base_url=host, timeout=timeout, client=client)
     try:
         prompt = build_prompt(forest, fmt=fmt, date_label=date_label)
     except ValueError as exc:
-        return Narration(ok=False, text=None, format=fmt, model=model, notice=str(exc))
+        return Narration(
+            ok=False, text=None, format=fmt, model=backend.model, notice=str(exc)
+        )
 
     if not forest:
         return Narration(
             ok=False,
             text=None,
             format=fmt,
-            model=model,
+            model=backend.model,
             notice="nothing to narrate (no sessions for this day)",
         )
 
-    return _ollama_generate(
-        prompt,
-        fmt=fmt,
-        model=model,
-        host=host,
-        timeout=timeout,
-        client=client,
-    )
+    return _generate(prompt, fmt=fmt, backend=backend)
 
 
-def _ollama_generate(
-    prompt: str,
-    *,
-    fmt: str,
-    model: str,
-    host: str,
-    timeout: float,
-    client: httpx.Client | None = None,
-) -> Narration:
-    """POST ``prompt`` to Ollama ``/api/generate`` and wrap the result.
+def _generate(prompt: str, *, fmt: str, backend: NarrationBackend) -> Narration:
+    """Run ``prompt`` through ``backend`` and wrap the result.
 
-    Shared by :func:`narrate` and :func:`narrate_blame`. Any failure is caught
-    and returned as a :class:`Narration` with ``ok=False`` and an explanatory
-    ``notice``; this never raises for an unreachable or misbehaving server.
+    Shared by :func:`narrate` and :func:`narrate_blame`. A :class:`BackendError`
+    is caught and returned as a :class:`Narration` with ``ok=False`` and the
+    backend's explanatory ``notice``; this never raises for an unreachable or
+    misbehaving server.
     """
-    url = host.rstrip("/") + "/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        # Low temperature: we want a faithful retelling of the outline, not
-        # creative embellishment that invents commands the user never ran.
-        "options": {"temperature": 0.4},
-    }
-
-    owns_client = client is None
-    client = client or httpx.Client(timeout=timeout)
     try:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-    except httpx.ConnectError:
+        text = backend.generate(prompt)
+    except BackendError as exc:
         return Narration(
-            ok=False,
-            text=None,
-            format=fmt,
-            model=model,
-            notice=(
-                f"could not reach Ollama at {host} — is it running? "
-                "(`ollama serve`). Showing the raw tree instead."
-            ),
+            ok=False, text=None, format=fmt, model=backend.model, notice=exc.notice
         )
-    except httpx.TimeoutException:
-        return Narration(
-            ok=False,
-            text=None,
-            format=fmt,
-            model=model,
-            notice=f"Ollama at {host} timed out after {timeout:g}s. Showing the raw tree.",
-        )
-    except httpx.HTTPStatusError as exc:
-        detail = _ollama_error_detail(exc.response)
-        return Narration(
-            ok=False,
-            text=None,
-            format=fmt,
-            model=model,
-            notice=(
-                f"Ollama returned HTTP {exc.response.status_code}"
-                f"{detail}. Showing the raw tree."
-            ),
-        )
-    except (httpx.HTTPError, ValueError) as exc:
-        # ValueError covers resp.json() on a non-JSON body.
-        return Narration(
-            ok=False,
-            text=None,
-            format=fmt,
-            model=model,
-            notice=f"Ollama response could not be parsed ({exc}). Showing the raw tree.",
-        )
-    finally:
-        if owns_client:
-            client.close()
-
-    text = (data.get("response") or "").strip() if isinstance(data, dict) else ""
-    if not text:
-        return Narration(
-            ok=False,
-            text=None,
-            format=fmt,
-            model=model,
-            notice="Ollama returned an empty narration. Showing the raw tree.",
-        )
-
-    return Narration(ok=True, text=text, format=fmt, model=model)
-
-
-def _ollama_error_detail(response: httpx.Response) -> str:
-    """Best-effort extraction of Ollama's JSON ``error`` field for a notice."""
-    try:
-        body = response.json()
-    except ValueError:
-        return ""
-    if isinstance(body, dict) and isinstance(body.get("error"), str):
-        msg = body["error"].strip()
-        if msg:
-            # Common, actionable case: the model isn't pulled yet.
-            return f" ({msg})"
-    return ""
+    return Narration(ok=True, text=text, format=fmt, model=backend.model)
