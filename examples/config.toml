@@ -58,3 +58,12 @@ redact = true
 # {date} (YYYY-MM-DD), so the default writes e.g. 2026-06-29.md. Subdirectories
 # are allowed (e.g. "daily/{date}.md") and created as needed. Default: "{date}.md".
 filename_template = "{date}.md"
+
+# --- yak post: deliver a standup/story to chat ------------------------------
+# Incoming-webhook URLs for `yak post --to slack|discord`. Set the platform you
+# use, then push your standup with `yak post --to slack`. Only the final,
+# redacted text leaves the box, and only when you run the command. Treat a
+# webhook URL as a write credential and keep it out of shared dotfiles.
+# [post]
+# slack = "https://hooks.slack.com/services/T000/B000/XXXX"
+# discord = "https://discord.com/api/webhooks/000/XXXX"
