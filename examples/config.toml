@@ -18,6 +18,17 @@ idle_gap = 25
 # (e.g. `ollama pull llama3`). Default: "llama3".
 model = "llama3"
 
+# Narration backend: "ollama" (local, default) or "openai_compat" for any
+# OpenAI-compatible /v1/chat/completions endpoint (LM Studio, llama.cpp server).
+# WARNING: a non-local openai_compat endpoint sends narration off-box and breaks
+# the privacy guarantee. Default: "ollama".
+backend = "ollama"
+
+# Base URL for the narration backend. Unset => ollama uses ollama_host, and
+# openai_compat uses http://localhost:1234/v1. openai_compat reads an optional
+# API key from $YAK_LLM_API_KEY (never put secrets in this file).
+# llm_base_url = "http://localhost:1234/v1"
+
 # Where your local Ollama server lives. Point this at another box to use a
 # remote Ollama on your LAN. Default: "http://localhost:11434".
 ollama_host = "http://localhost:11434"
