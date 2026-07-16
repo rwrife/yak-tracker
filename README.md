@@ -34,6 +34,7 @@ yak demo                  # see a sample day instantly — no setup needed
 yak today                 # reconstruct + narrate today's coding day
 yak today --format standup  # just the shippable bullets
 yak today --json            # machine-readable forest (for scripting)
+yak post --to slack         # push the standup to Slack or Discord
 yak tui                   # explore the tree interactively (collapse/expand)
 yak week                  # a week of rabbit holes as a depth heatmap
 yak score                 # a single 0–100 focus score for today
@@ -330,6 +331,60 @@ tags: [yak-tracker]
 ---
 ```
 
+## `yak post` — push your standup to Slack or Discord
+
+Once yak reconstructs your day, `yak post` closes the loop: it narrates the day
+and pushes the result straight to a Slack or Discord channel via an **incoming
+webhook** — no copy-paste. Local-first still holds: narration runs on your local
+backend and only the final, **redacted** text leaves the box, and only when you
+run the command.
+
+```bash
+yak post --to slack                     # narrate today's standup → Slack
+yak post --to discord                   # → Discord
+yak post --to slack --format story      # send the saga instead of the standup
+yak post --to slack --date 2026-06-17   # a specific day
+yak post --to slack --since 7           # last 7 days, one message each
+yak post --to slack --dry-run           # print the exact payload, send nothing
+yak post --to slack --webhook https://hooks.slack.com/services/…  # ad-hoc URL
+yak post --to slack --no-llm            # post the deterministic outline
+```
+
+`--format` defaults to **standup** here (delivery wants bullets, not a saga);
+`--date`/`--since` behave exactly as in `yak today`. If narration is unavailable
+(no backend, or `--no-llm`), yak posts a deterministic outline of the day so you
+always send *something*.
+
+### Webhook setup
+
+The webhook URL is **never hardcoded** — it comes from `--webhook` or the
+`[post]` table in your config. Treat a webhook URL like a write credential and
+keep it out of shared dotfiles.
+
+```toml
+# ~/.config/yak-tracker/config.toml
+[post]
+slack = "https://hooks.slack.com/services/T000/B000/XXXX"
+discord = "https://discord.com/api/webhooks/000/XXXX"
+```
+
+- **Slack:** create an *Incoming Webhook* (Slack app → *Incoming Webhooks* →
+  *Add New Webhook to Workspace*), pick the channel, copy the URL into
+  `[post].slack`.
+- **Discord:** *Server Settings → Integrations → Webhooks → New Webhook*, choose
+  the channel, *Copy Webhook URL*, drop it into `[post].discord`.
+
+### Privacy & safety
+
+- The **redaction pass runs before send** (same rules as `--json`/`--export`),
+  so tokens and secrets are scrubbed from the message.
+- Redaction is mandatory for posting: `--no-redact` is **refused** unless you
+  also pass `--force`, because this command sends text off the box.
+- `--dry-run` prints the exact JSON payload and sends nothing — use it to verify
+  what would go out.
+- A non-2xx response from the webhook is surfaced as a clear error (with the
+  status and response snippet), not swallowed.
+
 ## `yak tui` — explore the tree interactively
 
 The static `yak today` render is perfect for a glance, but a deep day — every
@@ -583,6 +638,7 @@ yak today                      # render + narrate today ✅
 yak today --format standup     # just the shippable bullet points ✅
 yak today --format story       # the rabbit-hole saga ✅
 yak today --format learning    # what you learned today ✅
+yak post --to slack            # deliver the standup to Slack/Discord ✅
 yak week                       # a week of rabbit holes as a depth heatmap ✅
 yak score                      # a single 0–100 daily focus score ✅
 yak sessions                   # list time-gapped work sessions ✅

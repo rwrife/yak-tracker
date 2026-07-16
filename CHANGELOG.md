@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`yak post` — push your standup to Slack or Discord.** Narrates the day and
+  delivers it to a chat channel via an *incoming webhook* (`yak post --to
+  slack|discord`), closing the loop from "reconstruct my day" to "deliver my
+  standup" with no copy-paste. `--format` defaults to `standup`; `--date` /
+  `--since` behave like `yak today`. The webhook URL comes from `--webhook` or a
+  new `[post]` config table (`slack`/`discord` keys) — never hardcoded. The
+  **redaction pass runs before send**, and `--no-redact` is refused unless
+  `--force` is given (this command sends text off the box). `--dry-run` prints
+  the exact JSON payload without sending, and a non-2xx webhook response surfaces
+  as a clear error. Slack (`{"text": …}`) and Discord (`{"content": …}`,
+  length-capped) payload shapes are handled; the HTTP client uses `httpx`.
+
 - **Pluggable LLM backends** — narration is no longer hard-wired to Ollama. A
   new `NarrationBackend` protocol backs two implementations: the existing
   `ollama` backend (default) and an `openai_compat` backend that hits any

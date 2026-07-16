@@ -23,9 +23,15 @@ from .collectors import collect_extra_shells_for_date
 from .collectors import git as git_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
-from .export import ExportError, write_export
+from .export import (
+    ExportError,
+    _forest_markdown,  # deterministic outline fallback body
+    write_export,
+)
 from .narrate import make_backend, narrate_blame
 from .narrate import narrate as narrate_forest
+from .post import VALID_PLATFORMS, PostError, post_to_webhook
+from .redact import redact_text
 from .render import (
     render_blame,
     render_events,
@@ -1299,6 +1305,12 @@ def config_cmd(
     table.add_row("timeout", f"{cfg.timeout:g} s")
     table.add_row("format", cfg.format)
     table.add_row("redact", "on" if cfg.redact else "[red]off[/red]")
+    post_display = (
+        "\n".join(f"{p}: {url}" for p, url in sorted(cfg.post_webhooks.items()))
+        if cfg.post_webhooks
+        else "[dim](none configured)[/dim]"
+    )
+    table.add_row("post webhooks", post_display)
     table.add_row("config file", str(cfg.path))
     console.print(table)
     console.print(f"[dim]source: {cfg.source}[/dim]")
@@ -1306,6 +1318,207 @@ def config_cmd(
         console.print("\n[yellow]Warnings:[/yellow]")
         for warning in cfg.warnings:
             console.print(f"  [yellow]\N{WARNING SIGN}  {warning}[/yellow]")
+
+
+@app.command()
+def post(
+    to: str = typer.Option(
+        ...,
+        "--to",
+        help="Where to post: 'slack' or 'discord'.",
+    ),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help=(
+            "Persona to post: standup (default), story, or learning. "
+            "Defaults to standup for delivery."
+        ),
+    ),
+    webhook: str = typer.Option(
+        None,
+        "--webhook",
+        help="Incoming-webhook URL. Overrides the [post] config table.",
+    ),
+    date_str: str = typer.Option(
+        None,
+        "--date",
+        "-d",
+        help="Day to post (YYYY-MM-DD). Defaults to today.",
+    ),
+    since: int = typer.Option(
+        None,
+        "--since",
+        "-s",
+        min=1,
+        help="Post the last N days ending at --date (oldest first).",
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to config or cwd.",
+    ),
+    shell: str = typer.Option(
+        None, "--shell", help="Force shell grammar: bash or zsh."
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        None, "--idle-gap", "-g", help="Idle minutes that start a new session."
+    ),
+    model: str = typer.Option(None, "--model", help="Narration model override."),
+    backend: str = typer.Option(
+        None, "--backend", help="Narration backend override."
+    ),
+    llm_base_url: str = typer.Option(
+        None, "--llm-base-url", help="Base URL for the narration backend."
+    ),
+    no_git: bool = typer.Option(False, "--no-git", help="Skip the git collector."),
+    no_shell: bool = typer.Option(
+        False, "--no-shell", help="Skip the shell collector."
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Skip narration; post the deterministic outline instead.",
+    ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Disable the redaction pass. Refused unless --force is also set.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Allow posting with redaction disabled (with --no-redact).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print the exact payload that would be sent, without sending.",
+    ),
+) -> None:
+    """Deliver a rendered day to Slack or Discord via an incoming webhook.
+
+    Reconstructs the day (like ``yak today``), narrates it in the chosen
+    ``--format`` persona (default ``standup``), runs the redaction pass, and
+    POSTs the final text to the configured webhook. Local-first holds: narration
+    runs against your local backend and only the final, redacted text leaves the
+    box — and only when you run this command.
+
+    The webhook URL comes from ``--webhook`` or the ``[post]`` config table
+    (``slack``/``discord`` keys); it is never hardcoded. Use ``--dry-run`` to see
+    the exact JSON payload without sending, and ``--since N`` to post several
+    days (one message per day, oldest first).
+    """
+    platform = to.lower()
+    if platform not in VALID_PLATFORMS:
+        raise typer.BadParameter(
+            f"--to must be one of {', '.join(VALID_PLATFORMS)}"
+        )
+
+    if fmt is not None and fmt not in VALID_FORMATS:
+        raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    # Redaction is the privacy stance: refuse to send with it off unless the
+    # user explicitly accepts the risk with --force.
+    if no_redact and not force:
+        raise typer.BadParameter(
+            "refusing to post with redaction disabled; re-run with --force if "
+            "you really mean to send raw text off the box"
+        )
+
+    end = _parse_date(date_str)
+    days = _date_range(end, since)
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        model=model,
+        backend=backend,
+        llm_base_url=llm_base_url,
+        # Delivery defaults to standup, not the config's story persona.
+        format=fmt or "standup",
+        redact=False if no_redact else None,
+    )
+
+    webhook_url = webhook or config.post_webhooks.get(platform)
+    if not webhook_url and not dry_run:
+        raise typer.BadParameter(
+            f"no webhook URL for {platform}; add it under [post] in your config "
+            "or pass --webhook (or use --dry-run to preview)"
+        )
+
+    def _forest_for(day: date) -> list:
+        collected = _collect_day_events(
+            day,
+            repos=list(config.repos) if config.repos else None,
+            shell=shell,
+            histfile=histfile,
+            no_git=no_git,
+            no_shell=no_shell,
+            redact=config.redact,
+        )
+        day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+        return build_forest(day_sessions)
+
+    for day in days:
+        forest = _forest_for(day)
+        heading = f"\N{OX} {config.format.capitalize()} — {day.isoformat()}"
+
+        body_text: str | None = None
+        if forest and not no_llm:
+            narration = narrate_forest(
+                forest,
+                fmt=config.format,
+                backend=_backend_for(config),
+                timeout=config.timeout,
+                date_label=day.isoformat(),
+            )
+            if narration.ok:
+                body_text = narration.text
+            elif narration.notice:
+                console.print(
+                    f"[yellow]\N{WARNING SIGN}  {narration.notice} "
+                    f"Posting the raw outline instead.[/yellow]"
+                )
+
+        if body_text is None:
+            # Offline / no-LLM / empty day: deterministic outline.
+            outline = _forest_markdown(forest) if forest else "_(nothing to report)_"
+            body_text = outline
+
+        body = f"{heading}\n\n{body_text.strip()}"
+
+        # Defence in depth: redact the final text again before it leaves, unless
+        # the user disabled redaction (already gated behind --force above).
+        if config.redact:
+            body = redact_text(body).text
+
+        if dry_run:
+            from .post import build_payload
+
+            payload = build_payload(platform, body)
+            console.print(f"[dim]— dry run: {platform} payload for {day.isoformat()} —[/dim]")
+            console.print_json(json.dumps(payload, ensure_ascii=False))
+            continue
+
+        try:
+            post_to_webhook(platform, webhook_url, body, timeout=config.timeout)
+        except PostError as exc:
+            detail = f" ({exc.detail})" if exc.detail else ""
+            raise typer.BadParameter(f"{exc}{detail}") from exc
+
+        console.print(
+            f"\N{OX} Posted {config.format} for [bold]{day.isoformat()}[/bold] "
+            f"to {platform}."
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

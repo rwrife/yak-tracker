@@ -37,6 +37,8 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .post import VALID_PLATFORMS
+
 __all__ = [
     "Config",
     "ConfigExistsError",
@@ -147,6 +149,14 @@ redact = true
 # the default writes e.g. 2026-06-29.md. Subdirectories are allowed
 # (e.g. "daily/{date}.md") and are created as needed.
 filename_template = "{date}.md"
+
+# Incoming-webhook URLs for `yak post`. Set the platform you use and then run
+# e.g. `yak post --to slack` to push your standup to a channel. Only the final
+# (redacted) text leaves the box, and only when you run the command. Keep these
+# out of shared dotfiles — a webhook URL is a write credential.
+# [post]
+# slack = "https://hooks.slack.com/services/T000/B000/XXXX"
+# discord = "https://discord.com/api/webhooks/000/XXXX"
 """
 
 
@@ -187,6 +197,7 @@ class Config:
     redact: bool = True
     vault_path: Path | None = None
     filename_template: str = "{date}.md"
+    post_webhooks: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
     source: str = "defaults"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -205,6 +216,7 @@ class Config:
         redact: bool | None = None,
         vault_path: Path | None = None,
         filename_template: str | None = None,
+        post_webhooks: dict[str, str] | None = None,
     ) -> Config:
         """Return a copy with any non-``None`` CLI overrides applied.
 
@@ -235,6 +247,10 @@ class Config:
             changes["vault_path"] = _expand(vault_path)
         if filename_template is not None:
             changes["filename_template"] = filename_template
+        if post_webhooks:
+            merged = dict(self.post_webhooks)
+            merged.update(post_webhooks)
+            changes["post_webhooks"] = merged
         return replace(self, **changes) if changes else self
 
     def resolved_base_url(self) -> str | None:
@@ -372,6 +388,29 @@ def _coerce_template(raw: object, key: str, warnings: list[str]) -> str | None:
     return template
 
 
+def _coerce_post_table(
+    raw: object, warnings: list[str]
+) -> dict[str, str]:
+    """Validate the ``[post]`` table into a ``{platform: webhook_url}`` map.
+
+    Only the known platforms (slack, discord) are honoured; unknown keys and
+    non-string values are recorded in ``warnings`` and skipped, so one typo
+    doesn't make ``yak`` unusable.
+    """
+    if not isinstance(raw, dict):
+        warnings.append("'post' must be a table (e.g. [post]); ignoring it")
+        return {}
+    webhooks: dict[str, str] = {}
+    for platform in VALID_PLATFORMS:
+        if platform in raw:
+            url = _coerce_str(raw[platform], f"post.{platform}", warnings)
+            if url:
+                webhooks[platform] = url
+    for unknown in sorted(set(raw) - set(VALID_PLATFORMS)):
+        warnings.append(f"unknown config key 'post.{unknown}'; ignoring it")
+    return webhooks
+
+
 def _parse_table(
     data: dict[str, object], warnings: list[str]
 ) -> dict[str, object]:
@@ -443,6 +482,11 @@ def _parse_table(
         if template is not None:
             values["filename_template"] = template
 
+    if "post" in data:
+        webhooks = _coerce_post_table(data["post"], warnings)
+        if webhooks:
+            values["post_webhooks"] = webhooks
+
     known = {
         "repos",
         "idle_gap",
@@ -455,6 +499,7 @@ def _parse_table(
         "redact",
         "vault_path",
         "filename_template",
+        "post",
     }
     for unknown in sorted(set(data) - known):
         warnings.append(f"unknown config key {unknown!r}; ignoring it")
