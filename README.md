@@ -37,6 +37,7 @@ yak today --json            # machine-readable forest (for scripting)
 yak post --to slack         # push the standup to Slack or Discord
 yak tui                   # explore the tree interactively (collapse/expand)
 yak week                  # a week of rabbit holes as a depth heatmap
+yak saga --match oauth    # stitch one feature's multi-day journey into a story
 yak score                 # a single 0–100 focus score for today
 yak blame path/to/file    # why one file kept pulling you back
 yak raw         # parse today's shell history into a table
@@ -464,6 +465,50 @@ local-only collection and sessionizing engine, but skips Ollama narration — th
 week view is about *shape*, not prose. The window defaults to 7 days; `--since
 N` overrides the span (e.g. `--since 30` for a month).
 
+
+## `yak saga` — stitch a multi-day feature journey
+
+`yak today`/`yak week` are day-scoped, but a real feature — "ship OAuth" — rarely
+fits in one day. Its detours get scattered across a week. **`yak saga` follows a
+single thread across days** and stitches it into one continuous narrative,
+preserving per-day boundaries so the through-line reads day by day ("Day 1 you
+scaffolded… Day 3 you rabbit-holed into the lockfile…").
+
+Pick the thread two ways:
+
+```bash
+yak saga --match oauth            # every session mentioning "oauth"
+yak saga --branch feat/oauth      # sessions on a specific git branch
+```
+
+`--match KEYWORD` is a case-insensitive substring test over each session's
+commits, commands, touched paths, and branch names — a session joins the saga if
+any of its events mention the keyword. `--branch NAME` anchors on a git branch
+token (so `--branch main` won't spuriously match `domain` or `maintenance`).
+The two are mutually exclusive.
+
+Choose the window with a relative `--since` or explicit dates:
+
+```bash
+yak saga --match oauth --since 7d       # last 7 days (default)
+yak saga --match oauth --since 2w       # last two weeks
+yak saga --match oauth --from 2026-06-01 --to 2026-06-14   # an exact window
+yak saga --branch feat/oauth --format standup   # narrate as standup bullets
+yak saga --match oauth --no-llm         # skip Ollama; print the raw saga tree
+yak saga --match oauth --json           # machine-readable multi-day document
+yak saga --match oauth --repo ~/code/app -r ~/code/lib   # several repos
+```
+
+Only days with at least one matching session are kept, so the arc stays dense.
+Narration honours `--format` (standup/story/learning) via a local Ollama, with
+the same graceful degradation as `yak today`: no Ollama (or `--no-llm`) prints
+the structured multi-day tree instead. `--json` emits the whole saga as one
+self-describing document — a `days` array, each with its own matching-session
+forest (same per-session shape as `yak today --json`) plus per-day and overall
+roll-ups — so you can post-process a feature's full arc without re-reading
+history.
+
+
 ## `yak score` — daily focus metric
 
 `yak score` boils the whole day down to **one number**: a 0–100 *focus score*
@@ -640,6 +685,7 @@ yak today --format story       # the rabbit-hole saga ✅
 yak today --format learning    # what you learned today ✅
 yak post --to slack            # deliver the standup to Slack/Discord ✅
 yak week                       # a week of rabbit holes as a depth heatmap ✅
+yak saga --match oauth         # a feature's multi-day journey, narrated ✅
 yak score                      # a single 0–100 daily focus score ✅
 yak sessions                   # list time-gapped work sessions ✅
 yak raw                        # dump normalized events (no LLM) ✅

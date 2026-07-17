@@ -40,8 +40,10 @@ __all__ = [
     "OpenAICompatBackend",
     "make_backend",
     "build_outline",
+    "build_saga_outline",
     "build_prompt",
     "narrate",
+    "narrate_saga",
     "narrate_blame",
     "build_blame_outline",
     "PERSONAS",
@@ -512,6 +514,18 @@ def build_prompt(
     return f"{persona}\n\n--- ACTIVITY OUTLINE ---\n{outline}\n--- END OUTLINE ---\n"
 
 
+# Saga-specific framing overlay. The multi-day nature ('Day 1… Day 3…') is the
+# whole point, so we tell the model to honour the day boundaries and trace the
+# through-line across them, then reuse the chosen persona's voice.
+_SAGA_FRAMING = (
+    "The activity below is a SINGLE thread of work reconstructed across MULTIPLE "
+    "days (each 'Day' block is a separate calendar day, oldest first). Trace the "
+    "through-line of this one feature/effort across the days — call out how it "
+    "evolved day to day and where the rabbit holes happened — rather than "
+    "treating each day in isolation."
+)
+
+
 def narrate(
     forest: Sequence[Node],
     *,
@@ -562,6 +576,79 @@ def narrate(
             notice="nothing to narrate (no sessions for this day)",
         )
 
+    return _generate(prompt, fmt=fmt, backend=backend)
+
+
+def build_saga_outline(saga, *, label: str | None = None) -> str:
+    """Serialise a multi-day :class:`~yak_tracker.saga.Saga` into a text outline.
+
+    One ``Day <date>`` header per active day, each followed by that day's
+    matching session blocks (reusing the same per-session indentation as
+    :func:`build_outline`). Deterministic so tests can assert on it and repeated
+    runs are stable. This is what gets sent to the model — never raw history.
+    """
+    if saga.is_empty:
+        return "(no matching activity across the window)"
+
+    day_blocks: list[str] = []
+    for sd in saga.days:
+        block_lines: list[str] = [f"Day {sd.day.isoformat()}"]
+        for i, tree in enumerate(sd.forest, start=1):
+            header = f"  Session {i}"
+            if tree.ts is not None:
+                header += f" (started {tree.ts.strftime('%H:%M')})"
+            header += (
+                f" — {tree.descendants()} event(s), {tree.max_depth()} level(s) deep"
+            )
+            lines: list[str] = [header]
+            _render_node(tree, 1, lines)
+            block_lines.append("\n".join(lines))
+        day_blocks.append("\n".join(block_lines))
+
+    preamble = "Multi-day yak-shaving saga"
+    if label:
+        preamble += f" for {label}"
+    preamble += ":"
+    return preamble + "\n\n" + "\n\n".join(day_blocks)
+
+
+def narrate_saga(
+    saga,
+    *,
+    fmt: str = "story",
+    label: str | None = None,
+    backend: NarrationBackend,
+) -> Narration:
+    """Narrate a multi-day :class:`~yak_tracker.saga.Saga` with an LLM backend.
+
+    Reuses the chosen persona but overlays :data:`_SAGA_FRAMING` so the model
+    honours day boundaries and traces the through-line across them. Degrades
+    exactly like :func:`narrate`: any backend failure (or an empty saga / bad
+    format) returns a :class:`Narration` with ``ok=False`` and a ``notice`` so
+    the CLI can fall back to the raw saga tree. Never raises for a bad server.
+    """
+    if fmt not in PERSONAS:
+        return Narration(
+            ok=False,
+            text=None,
+            format=fmt,
+            model=backend.model,
+            notice=f"unknown format {fmt!r}; expected one of {', '.join(VALID_FORMATS)}",
+        )
+    if saga.is_empty:
+        return Narration(
+            ok=False,
+            text=None,
+            format=fmt,
+            model=backend.model,
+            notice="nothing to narrate (no matching sessions in the window)",
+        )
+
+    persona = f"{PERSONAS[fmt]}\n\n{_SAGA_FRAMING}"
+    outline = build_saga_outline(saga, label=label)
+    prompt = (
+        f"{persona}\n\n--- ACTIVITY OUTLINE ---\n{outline}\n--- END OUTLINE ---\n"
+    )
     return _generate(prompt, fmt=fmt, backend=backend)
 
 
