@@ -483,9 +483,19 @@ yak saga --branch feat/oauth      # sessions on a specific git branch
 
 `--match KEYWORD` is a case-insensitive substring test over each session's
 commits, commands, touched paths, and branch names — a session joins the saga if
-any of its events mention the keyword. `--branch NAME` anchors on a git branch
-token (so `--branch main` won't spuriously match `domain` or `maintenance`).
-The two are mutually exclusive.
+any of its events mention the keyword. Git commit paths are searched even when
+the subject does not mention them. `--branch NAME` resolves a local branch's
+commits, so ordinary commits match without repeating the branch name. Branch
+references are case-sensitive and bounded by the first branch-specific commit
+through its merge (or last commit). The fork point is relative to `origin/HEAD`,
+or local `main`/`master`; without a primary branch, reachable history is used.
+The two selectors are mutually exclusive.
+
+Non-fast-forward merges retain the original branch lifetime. If a
+fast-forwarded branch no longer has a distinguishable fork point, yak reports
+that limitation; use `--match` and explicit dates instead. With `--no-git`,
+branch matching can only recognize explicit branch tokens in shell history
+(so `main` won't match `domain` or `maintenance`).
 
 Choose the window with a relative `--since` or explicit dates:
 

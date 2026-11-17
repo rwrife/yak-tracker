@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`yak saga` — stitch a multi-day feature journey into one narrative.** Where
   `yak today`/`yak week` are day-scoped, `yak saga` follows a *single thread*
   across days: pick it with `--match KEYWORD` (case-insensitive substring over a
-  session's commits/commands/paths/branches) or `--branch NAME` (git branch
-  token, boundary-aware so `main` ≠ `domain`), choose the window with a relative
+  session's commits/commands/paths/branches) or `--branch NAME` (git commit
+  membership bounded by the branch lifetime), choose the window with a relative
   `--since 7d`/`2w` (default 7d) or explicit `--from`/`--to`, and yak keeps only
   the matching sessions while **preserving per-day boundaries** so the
   through-line reads day by day. Narration honours `--format`
@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local-only collection engine, no narration. Flags: `--date`, `--history`,
   `--since`, `--repo`, `--idle-gap`, `--no-git`, `--no-shell`, `--no-redact`.
   The scoring formula is documented in the README. (v0.2 backlog, landed early)
+
+### Fixed
+
+- Saga git collection respects historical and longer-than-seven-day windows,
+  searches committed paths, and resolves branch membership through merges.
+  Reflog events now use actual activity timestamps, keeping branch switches
+  in the correct day's saga.
 
 ## [0.1.0] — 2026-06-26
 

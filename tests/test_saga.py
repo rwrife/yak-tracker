@@ -97,6 +97,7 @@ def test_branch_matcher_matches_slashed_branch() -> None:
         m,
     )
     assert not session_matches(_session("feat work"), m)
+    assert not session_matches(_session("git checkout feat/OAUTH"), m)
     with pytest.raises(ValueError):
         branch_matcher("   ")
 

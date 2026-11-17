@@ -28,6 +28,7 @@ from .export import (
     _forest_markdown,  # deterministic outline fallback body
     write_export,
 )
+from .models import Event
 from .narrate import make_backend, narrate_blame, narrate_saga
 from .narrate import narrate as narrate_forest
 from .post import VALID_PLATFORMS, PostError, post_to_webhook
@@ -46,10 +47,14 @@ from .render import (
 )
 from .saga import (
     DEFAULT_SAGA_DAYS,
+    BranchHistory,
+    SagaError,
     SinceError,
     branch_matcher,
     build_saga,
+    collect_saga_commits,
     keyword_matcher,
+    load_branch_history,
     parse_since,
 )
 from .sample import sample_events
@@ -1259,6 +1264,10 @@ def saga(
         raise typer.BadParameter("pass --match KEYWORD or --branch NAME to anchor the saga")
     if match is not None and branch is not None:
         raise typer.BadParameter("--match and --branch are mutually exclusive")
+    if match is not None and not match.strip():
+        raise typer.BadParameter("--match must not be empty")
+    if branch is not None and not branch.strip():
+        raise typer.BadParameter("--branch must not be empty")
     if fmt is not None and fmt not in VALID_FORMATS:
         raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
 
@@ -1276,13 +1285,6 @@ def saga(
             raise typer.BadParameter(str(exc)) from exc
         days = [end - timedelta(days=offset) for offset in range(span - 1, -1, -1)]
 
-    if branch is not None:
-        matcher = branch_matcher(branch)
-        match_label = f"branch:{branch}"
-    else:
-        matcher = keyword_matcher(match)
-        match_label = match
-
     config = load_config().with_overrides(
         idle_gap=idle_gap,
         repos=list(repos) if repos else None,
@@ -1294,16 +1296,45 @@ def saga(
         redact=False if no_redact else None,
     )
 
+    repo_paths = [p.expanduser().resolve() for p in config.repos] or [Path.cwd()]
+    git_events: list[Event] = []
+    histories: list[BranchHistory] = []
+    try:
+        if not no_git:
+            for repo in repo_paths:
+                if not git_collector.is_git_repo(repo):
+                    continue
+                if branch is not None:
+                    history = load_branch_history(repo, branch)
+                    if history is not None:
+                        histories.append(history)
+                git_events += collect_saga_commits(repo, days[0], days[-1])
+                git_events += git_collector.collect_reflog(
+                    repo, since=f"{days[0].isoformat()}T00:00:00"
+                )
+            if branch is not None and not histories:
+                raise SagaError(f"branch {branch!r} was not found in the selected repositories")
+    except SagaError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if branch is not None:
+        matcher = branch_matcher(branch, histories=histories)
+        match_label = f"branch:{branch}"
+    else:
+        matcher = keyword_matcher(match)
+        match_label = match
+
     def _forest_for(day: date) -> list:
         collected = _collect_day_events(
             day,
             repos=list(config.repos) if config.repos else None,
             shell=shell,
             histfile=histfile,
-            no_git=no_git,
+            no_git=True,
             no_shell=no_shell,
             redact=config.redact,
         )
+        collected += [event for event in git_events if event.on_date(day)]
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
 

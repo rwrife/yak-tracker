@@ -20,11 +20,9 @@ Matching is deliberately simple and honest:
   node's label *and* raw command/cwd/source in a session's tree. A session
   matches if any of its events mention the keyword (a branch name, a commit
   subject, a touched path, or free text).
-* **branch** (``--branch``) — matches sessions that switched to, or committed
-  on, that branch. Because git events carry the branch in reflog
-  ``checkout: moving … to <branch>`` lines and commit subjects, the same
-  substring test over the tree covers both; we just anchor it on the branch
-  token so ``--branch feat/oauth`` doesn't spuriously match unrelated text.
+* **branch** (``--branch``) — resolves branch commit membership and bounds
+  references to its first-commit through merge/last-activity window. Without
+  git collection, matches explicit, case-sensitive branch tokens only.
 """
 
 from __future__ import annotations
@@ -32,13 +30,20 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, time
+from pathlib import Path
 
+from .collectors.git import _epoch_to_dt, _repo_label, _run_git
+from .models import Event
 from .tree import Node
 
 __all__ = [
     "DEFAULT_SAGA_DAYS",
     "SinceError",
+    "SagaError",
+    "BranchHistory",
+    "load_branch_history",
+    "collect_saga_commits",
     "parse_since",
     "Matcher",
     "keyword_matcher",
@@ -62,6 +67,119 @@ Matcher = Callable[[Node], bool]
 
 class SinceError(ValueError):
     """Raised when a ``--since`` window string can't be parsed."""
+
+
+class SagaError(ValueError):
+    """Raised when git history cannot establish a branch's lifetime."""
+
+
+@dataclass(slots=True)
+class BranchHistory:
+    """Branch-specific commits and their first-commit to merge/activity window."""
+
+    repo: Path
+    commits: set[str]
+    start: datetime
+    end: datetime
+
+
+def load_branch_history(repo: Path, branch: str) -> BranchHistory | None:
+    """Resolve a local branch against the repository's primary branch.
+
+    Prefer origin/HEAD, then main/master. For a merged branch, use the merge's
+    first parent to recover the original fork point, not today's merge-base
+    (which would be the branch tip itself).
+    """
+    repo = repo.expanduser().resolve()
+    ref = f"refs/heads/{branch}"
+    tip_out = _run_git(repo, ["rev-parse", "--verify", f"{ref}^{{commit}}"])
+    if not tip_out:
+        return None
+    tip = tip_out.strip()
+    base = None
+    merged_at = None
+    merge_sha = None
+    primary = _run_git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD"])
+    candidates = [primary.strip()] if primary else []
+    candidates += ["refs/heads/main", "refs/heads/master"]
+    for candidate in candidates:
+        primary_tip = _run_git(repo, ["rev-parse", "--verify", f"{candidate}^{{commit}}"])
+        if not primary_tip:
+            continue
+        if candidate in (ref, f"refs/remotes/origin/{branch}"):
+            break
+        base_out = _run_git(repo, ["merge-base", tip, primary_tip.strip()])
+        if not base_out:
+            raise SagaError(f"cannot determine fork point for {branch!r} in {repo}")
+        base = base_out.strip()
+        if base == tip:
+            merges = _run_git(repo, [
+                "log", "--first-parent", "--merges", "--format=%ct%x1f%h%x1f%P", candidate,
+            ])
+            if merges is None:
+                raise SagaError(f"cannot read merge history for {branch!r} in {repo}")
+            for line in reversed(merges.splitlines()):
+                stamp, sha, parents_text = line.split("\x1f", 2)
+                parents = parents_text.split()
+                if tip in parents[1:]:
+                    fork = _run_git(repo, ["merge-base", tip, parents[0]])
+                    if fork:
+                        base = fork.strip()
+                        merged_at = _epoch_to_dt(stamp)
+                        merge_sha = sha
+                    break
+            if base == tip:
+                raise SagaError(
+                    f"cannot distinguish {branch!r}'s lifetime after a fast-forward "
+                    f"merge in {repo}; use --match with an explicit date window"
+                )
+        break
+
+    revisions = [ref, f"^{base}"] if base else [ref]
+    out = _run_git(repo, ["log", "--format=%h%x1f%ct", *revisions, "--"])
+    if out is None:
+        raise SagaError(f"cannot read branch history for {branch!r} in {repo}")
+    commits: set[str] = set()
+    stamps: list[datetime] = []
+    for line in out.splitlines():
+        sha, stamp = line.split("\x1f", 1)
+        ts = _epoch_to_dt(stamp)
+        if ts is not None:
+            commits.add(sha)
+            stamps.append(ts)
+    if not stamps:
+        raise SagaError(f"no branch-specific commits found for {branch!r} in {repo}")
+    if merge_sha:
+        commits.add(merge_sha)
+    return BranchHistory(repo, commits, min(stamps), merged_at or max(stamps))
+
+
+def collect_saga_commits(repo: Path, start: date, end: date) -> list[Event]:
+    """Collect the requested window, including paths, without a seven-day cap."""
+    out = _run_git(
+        repo,
+        [
+            "log", "--all", f"--since={datetime.combine(start, time.min).isoformat()}",
+            f"--until={datetime.combine(end, time(23, 59, 59)).isoformat()}",
+            "--format=%x1e%ct%x1f%h%x1f%s", "--name-only", "--",
+        ],
+    )
+    if out is None:
+        raise SagaError(f"cannot read git history in {repo}; use --no-git for shell history")
+    events: list[Event] = []
+    label = _repo_label(repo)
+    for record in out.split("\x1e"):
+        if not record.strip():
+            continue
+        header, *paths = record.strip().splitlines()
+        stamp, sha, subject = header.split("\x1f", 2)
+        events.append(Event(
+            cmd=f"commit {sha} {subject}" + "".join(f"\n{path}" for path in paths if path),
+            ts=_epoch_to_dt(stamp),
+            cwd=str(repo),
+            source=f"git:{label}",
+        ))
+    return events
 
 
 def parse_since(value: str | int | None, *, default: int = DEFAULT_SAGA_DAYS) -> int:
@@ -128,13 +246,13 @@ def keyword_matcher(keyword: str) -> Matcher:
     return _match
 
 
-def branch_matcher(branch: str) -> Matcher:
+def branch_matcher(
+    branch: str, *, histories: Sequence[BranchHistory] = ()
+) -> Matcher:
     """Matcher anchored on a git ``branch`` token.
 
-    A session belongs to a branch's saga if any event mentions the branch as a
-    whole token — a reflog ``checkout: moving … to <branch>`` hop, a commit
-    labelled with it, or a path/command referencing it. Using a word-ish
-    boundary keeps ``--branch main`` from matching ``domain`` or ``maintenance``.
+    Git-backed matching uses branch commit membership and bounds references by
+    its lifetime. Without git, only explicit branch tokens can be recognized.
     """
     token = branch.strip()
     if not token:
@@ -144,11 +262,36 @@ def branch_matcher(branch: str) -> Matcher:
     # cleanly while still requiring a real boundary on both sides.
     pattern = re.compile(
         rf"(?<![\w/.\-]){re.escape(token)}(?![\w/.\-])",
-        re.IGNORECASE,
     )
 
     def _match(root: Node) -> bool:
-        return pattern.search(_tree_haystack(root)) is not None
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            stack.extend(node.children)
+            if not histories:
+                if pattern.search(_node_haystack(node)):
+                    return True
+                continue
+            ev = node.event
+            if ev is None or ev.ts is None:
+                continue
+            for history in histories:
+                if not history.start <= ev.ts <= history.end:
+                    continue
+                if ev.cwd and Path(ev.cwd).expanduser().resolve() != history.repo:
+                    continue
+                fields = ev.cmd.split(maxsplit=2)
+                if (
+                    ev.source.startswith("git:")
+                    and len(fields) >= 2
+                    and fields[0] == "commit"
+                    and fields[1] in history.commits
+                ):
+                    return True
+                if pattern.search(_node_haystack(node)):
+                    return True
+        return False
 
     return _match
 
