@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`yak saga` — stitch a multi-day feature journey into one narrative.** Where
+  `yak today`/`yak week` are day-scoped, `yak saga` follows a *single thread*
+  across days: pick it with `--match KEYWORD` (case-insensitive substring over a
+  session's commits/commands/paths/branches) or `--branch NAME` (git commit
+  membership bounded by the branch lifetime), choose the window with a relative
+  `--since 7d`/`2w` (default 7d) or explicit `--from`/`--to`, and yak keeps only
+  the matching sessions while **preserving per-day boundaries** so the
+  through-line reads day by day. Narration honours `--format`
+  (standup/story/learning) via a local Ollama with the same graceful
+  degradation as `yak today` (`--no-llm` / no-Ollama prints the structured
+  multi-day saga tree). `--json` emits a self-describing saga document (a `days`
+  array, each with its own matching-session forest plus per-day and overall
+  roll-ups). New `saga.py` aggregation layer (mirroring `week.py`),
+  `narrate.build_saga_outline`/`narrate_saga`, `serialize.saga_to_dict`, and
+  `render.render_saga`. (Closes the PLAN.md backlog #12 "yak saga" item.)
+
 - **`yak post` — push your standup to Slack or Discord.** Narrates the day and
   delivers it to a chat channel via an *incoming webhook* (`yak post --to
   slack|discord`), closing the loop from "reconstruct my day" to "deliver my
@@ -66,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local-only collection engine, no narration. Flags: `--date`, `--history`,
   `--since`, `--repo`, `--idle-gap`, `--no-git`, `--no-shell`, `--no-redact`.
   The scoring formula is documented in the README. (v0.2 backlog, landed early)
+
+### Fixed
+
+- Saga git collection respects historical and longer-than-seven-day windows,
+  searches committed paths, and resolves branch membership through merges.
+  Reflog events now use actual activity timestamps, keeping branch switches
+  in the correct day's saga.
 
 ## [0.1.0] — 2026-06-26
 

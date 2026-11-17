@@ -283,6 +283,50 @@ def render_week(
         )
 
 
+# --- multi-day saga (yak saga) ---------------------------------------------
+
+
+def render_saga(
+    saga,
+    *,
+    console: Console | None = None,
+    title: str | None = None,
+    empty_message: str = "No matching sessions in this window.",
+) -> None:
+    """Print a multi-day saga as per-day tree blocks with a roll-up footer.
+
+    Each active day gets a header and its matching session trees (reusing
+    :func:`tree_view`), so the per-day boundaries the saga preserves stay visible.
+    This is the no-Ollama fallback surface for ``yak saga``.
+    """
+    console = console or Console()
+    if saga.is_empty:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return
+    if title:
+        console.print(f"[bold]{title}[/bold]")
+
+    for sd in saga.days:
+        console.print(
+            f"[bold cyan]\N{SPIRAL CALENDAR PAD} {sd.day.strftime('%a %Y-%m-%d')}[/bold cyan] "
+            f"[dim]— {sd.sessions} session(s), {sd.events} detour(s), "
+            f"depth {sd.max_depth}[/dim]"
+        )
+        for i, node in enumerate(sd.forest, start=1):
+            console.print(tree_view(node, index=i))
+        console.print()
+
+    console.print(
+        f"  [dim]{len(saga.days)} active day(s) over a {saga.span_days}-day span, "
+        f"{saga.total_sessions} session(s), {saga.total_events} detour(s).[/dim]"
+    )
+    if saga.peak_depth > 0:
+        console.print(
+            f"  [bold red]\N{FIRE} Deepest shave of the saga:[/bold red] "
+            f"[dim]{saga.peak_depth} level(s) deep.[/dim]"
+        )
+
+
 # --- focus score (yak score) -----------------------------------------------
 
 # Focus-score colour ramp (low → high). A high score is good (focused), so green

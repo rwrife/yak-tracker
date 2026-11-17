@@ -120,6 +120,15 @@ def test_collect_reflog_captures_checkouts(repo: Path) -> None:
     assert "checkout" in blob
     assert all(e.cmd.startswith("reflog ") for e in events)
     assert all(e.source == "git:proj" for e in events)
+    assert all(e.ts is not None for e in events)
+
+
+def test_collect_reflog_uses_activity_not_commit_time(repo: Path) -> None:
+    when = BASE + timedelta(hours=2)
+    _git(repo, "checkout", "-q", "feature", when=when)
+    events = git.collect_reflog(repo, since="1.year.ago")
+    checkout = next(e for e in events if "moving from main to feature" in e.cmd)
+    assert checkout.ts == when
 
 
 def test_collect_reflog_non_repo_is_empty(tmp_path: Path) -> None:

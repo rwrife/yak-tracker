@@ -67,7 +67,7 @@ def is_git_repo(path: Path) -> bool:
 
 
 def _epoch_to_dt(value: str) -> datetime | None:
-    """Parse a Unix-epoch string (git ``%ct`` / reflog ``%gt``) to a datetime."""
+    """Parse a Unix-epoch string to a datetime."""
     text = value.strip()
     if not text.lstrip("-").isdigit():
         return None
@@ -138,10 +138,11 @@ def collect_reflog(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
     branch-hopping navigation a coding day is full of. Returns ``[]`` when the
     repo has no reflog (e.g. a brand-new repo) or on any git error.
     """
-    fmt = _SEP.join(["%gt", "%h", "%gs"])
+    fmt = _SEP.join(["%gD", "%h", "%gs"])
     out = _run_git(
         repo,
-        ["reflog", "show", f"--since={since}", f"--pretty=format:{fmt}", "-n", "500"],
+        ["reflog", "show", f"--since={since}", "--date=unix",
+         f"--pretty=format:{fmt}", "-n", "500"],
     )
     if not out:
         return []
@@ -155,7 +156,7 @@ def collect_reflog(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
         parts = line.split(_SEP)
         if len(parts) < 3:
             continue
-        ts = _epoch_to_dt(parts[0])
+        ts = _epoch_to_dt(parts[0].rpartition("@{")[2].removesuffix("}"))
         abbrev, subject = parts[1].strip(), parts[2].strip()
         events.append(
             Event(

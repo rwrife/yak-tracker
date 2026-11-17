@@ -28,7 +28,8 @@ from .export import (
     _forest_markdown,  # deterministic outline fallback body
     write_export,
 )
-from .narrate import make_backend, narrate_blame
+from .models import Event
+from .narrate import make_backend, narrate_blame, narrate_saga
 from .narrate import narrate as narrate_forest
 from .post import VALID_PLATFORMS, PostError, post_to_webhook
 from .redact import redact_text
@@ -36,6 +37,7 @@ from .render import (
     render_blame,
     render_events,
     render_narration,
+    render_saga,
     render_score,
     render_score_history,
     render_sessions,
@@ -43,9 +45,21 @@ from .render import (
     render_week,
     score_footer,
 )
+from .saga import (
+    DEFAULT_SAGA_DAYS,
+    BranchHistory,
+    SagaError,
+    SinceError,
+    branch_matcher,
+    build_saga,
+    collect_saga_commits,
+    keyword_matcher,
+    load_branch_history,
+    parse_since,
+)
 from .sample import sample_events
 from .score import DEFAULT_HISTORY_DAYS, build_history, score_day
-from .serialize import forest_to_dict
+from .serialize import forest_to_dict, saga_to_dict
 from .sessionize import sessionize
 from .tree import build_forest
 from .week import DEFAULT_WEEK_DAYS, build_week
@@ -1109,6 +1123,256 @@ def week(
         f"({span}d)"
     )
     render_week(summary, console=console, title=title)
+
+
+@app.command()
+def saga(
+    match: str = typer.Option(
+        None,
+        "--match",
+        "-m",
+        help=(
+            "Keyword to stitch the saga around (case-insensitive). Matches a "
+            "session if its commits, commands, touched paths, or branch names "
+            "mention it. Mutually exclusive with --branch."
+        ),
+    ),
+    branch: str = typer.Option(
+        None,
+        "--branch",
+        "-b",
+        help=(
+            "Anchor the saga to a git branch: match sessions that switched to or "
+            "committed on it. Mutually exclusive with --match."
+        ),
+    ),
+    since: str = typer.Option(
+        None,
+        "--since",
+        "-s",
+        help=(
+            "Lookback window ending at --to (default today): e.g. '7d', '2w', or "
+            f"a plain number of days. Defaults to {DEFAULT_SAGA_DAYS}d. Ignored "
+            "when --from is given."
+        ),
+    ),
+    from_str: str = typer.Option(
+        None,
+        "--from",
+        help="Start of the window (YYYY-MM-DD, inclusive). Overrides --since.",
+    ),
+    to_str: str = typer.Option(
+        None,
+        "--to",
+        help="End of the window (YYYY-MM-DD, inclusive). Defaults to today.",
+    ),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help=(
+            "Narration persona: standup, story, or learning. Defaults to the "
+            "configured format. Requires a local Ollama; falls back to the raw "
+            "saga tree if absent."
+        ),
+    ),
+    repos: list[Path] = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Git repo to include (repeatable). Defaults to config or cwd.",
+    ),
+    shell: str = typer.Option(
+        None,
+        "--shell",
+        help="Force shell grammar: bash or zsh. Defaults to auto-detect.",
+    ),
+    histfile: Path = typer.Option(
+        None,
+        "--histfile",
+        help="Parse this history file instead of the auto-located one.",
+        exists=False,
+    ),
+    idle_gap: float = typer.Option(
+        None,
+        "--idle-gap",
+        "-g",
+        help="Minutes of inactivity that start a new session. Overrides config.",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        help="Ollama model to narrate with. Overrides config.",
+    ),
+    ollama_host: str = typer.Option(
+        None,
+        "--ollama-host",
+        help="Base URL of the local Ollama server. Overrides config.",
+    ),
+    backend: str = typer.Option(
+        None,
+        "--backend",
+        help="Narration backend: 'ollama' or 'openai_compat'. Overrides config.",
+    ),
+    llm_base_url: str = typer.Option(
+        None,
+        "--llm-base-url",
+        help="Base URL for the narration backend. Overrides config/--ollama-host.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the multi-day saga as JSON for scripting (implies --no-llm).",
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Skip Ollama narration; print the raw multi-day saga tree only.",
+    ),
+    no_git: bool = typer.Option(
+        False,
+        "--no-git",
+        help="Skip the git collector (shell history only).",
+    ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Skip the shell collector (git activity only).",
+    ),
+    no_redact: bool = typer.Option(
+        False,
+        "--no-redact",
+        help="Do not scrub secrets/tokens from shell commands.",
+    ),
+) -> None:
+    """Stitch a multi-day feature journey into one continuous narrative.
+
+    Where ``yak today``/``yak week`` are day-scoped, ``yak saga`` follows a
+    *single thread* across days. Pick the thread with either ``--match KEYWORD``
+    (substring over commits/commands/paths/branches) or ``--branch NAME`` (git
+    branch lifetime), choose the window with ``--since 7d`` (default) or an
+    explicit ``--from``/``--to``, and yak reconstructs each day, keeps only the
+    matching sessions, and preserves the per-day boundaries so the through-line
+    reads day by day ("Day 1 you scaffolded… Day 3 you rabbit-holed into the
+    lockfile…").
+
+    Narration honours ``--format`` (standup/story/learning) via a local Ollama;
+    with no Ollama (or ``--no-llm``) it prints the structured multi-day tree.
+    ``--json`` emits the whole saga (per-day matching forests) for scripting.
+    """
+    if match is None and branch is None:
+        raise typer.BadParameter("pass --match KEYWORD or --branch NAME to anchor the saga")
+    if match is not None and branch is not None:
+        raise typer.BadParameter("--match and --branch are mutually exclusive")
+    if match is not None and not match.strip():
+        raise typer.BadParameter("--match must not be empty")
+    if branch is not None and not branch.strip():
+        raise typer.BadParameter("--branch must not be empty")
+    if fmt is not None and fmt not in VALID_FORMATS:
+        raise typer.BadParameter(f"format must be one of {', '.join(VALID_FORMATS)}")
+
+    # Resolve the window: explicit --from/--to wins; otherwise --since days back.
+    end = _parse_date(to_str)
+    if from_str is not None:
+        start = _parse_date(from_str)
+        if start > end:
+            raise typer.BadParameter("--from must not be after --to")
+        days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    else:
+        try:
+            span = parse_since(since)
+        except SinceError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        days = [end - timedelta(days=offset) for offset in range(span - 1, -1, -1)]
+
+    config = load_config().with_overrides(
+        idle_gap=idle_gap,
+        repos=list(repos) if repos else None,
+        model=model,
+        ollama_host=ollama_host,
+        backend=backend,
+        llm_base_url=llm_base_url,
+        format=fmt,
+        redact=False if no_redact else None,
+    )
+
+    repo_paths = [p.expanduser().resolve() for p in config.repos] or [Path.cwd()]
+    git_events: list[Event] = []
+    histories: list[BranchHistory] = []
+    try:
+        if not no_git:
+            for repo in repo_paths:
+                if not git_collector.is_git_repo(repo):
+                    continue
+                if branch is not None:
+                    history = load_branch_history(repo, branch)
+                    if history is not None:
+                        histories.append(history)
+                git_events += collect_saga_commits(repo, days[0], days[-1])
+                git_events += git_collector.collect_reflog(
+                    repo, since=f"{days[0].isoformat()}T00:00:00"
+                )
+            if branch is not None and not histories:
+                raise SagaError(f"branch {branch!r} was not found in the selected repositories")
+    except SagaError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if branch is not None:
+        matcher = branch_matcher(branch, histories=histories)
+        match_label = f"branch:{branch}"
+    else:
+        matcher = keyword_matcher(match)
+        match_label = match
+
+    def _forest_for(day: date) -> list:
+        collected = _collect_day_events(
+            day,
+            repos=list(config.repos) if config.repos else None,
+            shell=shell,
+            histfile=histfile,
+            no_git=True,
+            no_shell=no_shell,
+            redact=config.redact,
+        )
+        collected += [event for event in git_events if event.on_date(day)]
+        day_sessions = sessionize(collected, idle_gap=config.idle_gap)
+        return build_forest(day_sessions)
+
+    saga_obj = build_saga(days, _forest_for, matcher, match_label=match_label)
+
+    if as_json:
+        console.print_json(json.dumps(saga_to_dict(saga_obj), ensure_ascii=False))
+        return
+
+    title = (
+        f"\N{OX} Yak saga — {match_label}"
+        + (
+            f" ({saga_obj.start.isoformat()} → {saga_obj.end.isoformat()})"
+            if not saga_obj.is_empty
+            else ""
+        )
+    )
+    empty_message = (
+        f"No sessions matched {match_label!r} in the last {len(days)} day(s). "
+        "(Try a broader --match, a wider window, or --repo.)"
+    )
+
+    if saga_obj.is_empty or no_llm:
+        render_saga(saga_obj, console=console, title=title, empty_message=empty_message)
+        return
+
+    narration = narrate_saga(
+        saga_obj,
+        fmt=config.format,
+        label=match_label,
+        backend=_backend_for(config),
+    )
+    if narration.ok:
+        render_narration(narration, console=console, title=title)
+    else:
+        if narration.notice:
+            console.print(f"[yellow]\N{WARNING SIGN}  {narration.notice}[/yellow]\n")
+        render_saga(saga_obj, console=console, title=title, empty_message=empty_message)
 
 
 @app.command()

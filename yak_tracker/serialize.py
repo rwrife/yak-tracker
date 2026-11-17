@@ -31,7 +31,13 @@ from datetime import UTC, date, datetime
 from .models import Event
 from .tree import Node
 
-__all__ = ["SCHEMA_VERSION", "node_to_dict", "forest_to_dict", "dumps"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "node_to_dict",
+    "forest_to_dict",
+    "saga_to_dict",
+    "dumps",
+]
 
 # Bump when the emitted shape changes incompatibly. Lets downstream consumers
 # guard against a future reshuffle.
@@ -122,6 +128,51 @@ def forest_to_dict(
             "max_depth": deepest,
         },
         "sessions": sessions,
+    }
+
+
+def saga_to_dict(
+    saga,
+    *,
+    generated_at: datetime | None = None,
+) -> dict:
+    """Serialize a multi-day :class:`~yak_tracker.saga.Saga` into a JSON dict.
+
+    The shape mirrors :func:`forest_to_dict` but adds a ``days`` array so the
+    per-day boundaries the saga preserves survive into machine-readable output.
+    Each day carries its own matching ``sessions`` forest (same per-session shape
+    as ``today --json``) plus quick per-day stats.
+    """
+    stamp = generated_at or datetime.now(UTC)
+    days = []
+    for sd in saga.days:
+        sessions = [_session_dict(i, root) for i, root in enumerate(sd.forest, start=1)]
+        days.append(
+            {
+                "date": sd.day.isoformat(),
+                "sessions": sessions,
+                "summary": {
+                    "sessions": sd.sessions,
+                    "events": sum(s["events"] for s in sessions),
+                    "max_depth": sd.max_depth,
+                },
+            }
+        )
+    return {
+        "schema": SCHEMA_VERSION,
+        "kind": "saga",
+        "match": saga.match,
+        "start": saga.start.isoformat() if saga.start else None,
+        "end": saga.end.isoformat() if saga.end else None,
+        "generated_at": _iso(stamp),
+        "summary": {
+            "active_days": len(saga.days),
+            "span_days": saga.span_days,
+            "sessions": saga.total_sessions,
+            "events": saga.total_events,
+            "peak_depth": saga.peak_depth,
+        },
+        "days": days,
     }
 
 
