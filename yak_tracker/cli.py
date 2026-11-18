@@ -20,7 +20,9 @@ from rich.table import Table
 from . import __version__
 from .blame import BlameError, blame_to_dict, build_blame
 from .collectors import collect_extra_shells_for_date
+from .collectors import fish as fish_collector
 from .collectors import git as git_collector
+from .collectors import nushell as nushell_collector
 from .collectors import shell as shell_collector
 from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
 from .export import (
@@ -41,6 +43,7 @@ from .render import (
     render_score,
     render_score_history,
     render_sessions,
+    render_stats,
     render_trees,
     render_week,
     score_footer,
@@ -61,6 +64,7 @@ from .sample import sample_events
 from .score import DEFAULT_HISTORY_DAYS, build_history, score_day
 from .serialize import forest_to_dict, saga_to_dict
 from .sessionize import sessionize
+from .stats import DEFAULT_RABBIT_HOLE_THRESHOLD, DEFAULT_STATS_DAYS, build_stats, repo_for
 from .tree import build_forest
 from .week import DEFAULT_WEEK_DAYS, build_week
 
@@ -1493,6 +1497,81 @@ def score(
             "file's timestamps. Try --history for a trend.)"
         ),
     )
+
+
+@app.command()
+def stats(
+    since: str | None = typer.Option(
+        None, "--since", "-s", help="Lookback window (default 30d); accepts days or weeks.",
+    ),
+    from_str: str | None = typer.Option(
+        None, "--from", help="First day, inclusive (YYYY-MM-DD); cannot combine with --since.",
+    ),
+    to_str: str | None = typer.Option(
+        None, "--to", help="Last day, inclusive (YYYY-MM-DD). Defaults to today.",
+    ),
+    repos: list[Path] = typer.Option(
+        None, "--repo", "-r",
+        help="Scope to this repo (repeatable); excludes shell events without a known cwd.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable statistics."),
+    threshold: int = typer.Option(
+        DEFAULT_RABBIT_HOLE_THRESHOLD, "--rabbit-hole-threshold", min=0,
+        help="Count a rabbit-hole day when its maximum detour depth exceeds this value.",
+    ),
+    shell: str | None = typer.Option(None, "--shell", help="Force bash or zsh history grammar."),
+    histfile: Path | None = typer.Option(None, "--histfile", help="Read this shell history file."),
+    idle_gap: float | None = typer.Option(
+        None, "--idle-gap", "-g", min=0, help="Session idle-gap minutes; overrides config.",
+    ),
+    no_git: bool = typer.Option(False, "--no-git", help="Skip git collection."),
+    no_shell: bool = typer.Option(False, "--no-shell", help="Skip shell collection."),
+) -> None:
+    """Local tangent trends over weeks or months, with no model or network."""
+    end = _parse_date(to_str)
+    if from_str is not None and since is not None:
+        raise typer.BadParameter("--from and --since cannot be combined")
+    try:
+        span = parse_since(since, default=DEFAULT_STATS_DAYS)
+        start = _parse_date(from_str) if from_str else end - timedelta(days=span - 1)
+    except (SinceError, OverflowError) as exc:
+        raise typer.BadParameter(f"invalid stats window: {exc}") from exc
+    if start > end:
+        raise typer.BadParameter("--from must not be after --to")
+    span = (end - start).days + 1
+    config = load_config().with_overrides(idle_gap=idle_gap, repos=repos or None)
+    tracked = sorted(
+        {repo.expanduser().resolve() for repo in config.repos or [Path.cwd()]},
+        key=lambda repo: (-len(repo.parts), str(repo)),
+    )
+    collected: list[Event] = []
+    if not no_shell:
+        collected += shell_collector.collect(shell=shell, path=histfile, redact=config.redact)
+        if histfile is None:
+            collected += fish_collector.collect(redact=config.redact)
+            collected += nushell_collector.collect(redact=config.redact)
+    if not no_git:
+        # Widen beyond the collector's seven-day/500-event defaults, once per window.
+        collected += git_collector.collect(
+            tracked, since=f"{start.isoformat()} 00:00:00", max_count=None,
+        )
+    by_day: dict[date, list[Event]] = {}
+    for event in collected:
+        if event.ts is None or not start <= event.ts.date() <= end:
+            continue
+        if repos and repo_for(event.cwd, tracked) is None:
+            continue
+        by_day.setdefault(event.ts.date(), []).append(event)
+
+    summary = build_stats(
+        end, span,
+        lambda day: build_forest(sessionize(by_day.get(day, []), idle_gap=config.idle_gap)),
+        threshold=threshold, repos=tracked,
+    )
+    if json_output:
+        typer.echo(json.dumps(summary.to_dict(), ensure_ascii=False))
+    else:
+        render_stats(summary, console=console)
 
 
 @app.command(name="config")

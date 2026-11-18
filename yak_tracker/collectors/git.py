@@ -85,12 +85,15 @@ def _repo_label(repo: Path) -> str:
     return repo.name or str(repo)
 
 
-def collect_commits(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
+def collect_commits(
+    repo: Path, *, since: str = _DEFAULT_SINCE, max_count: int | None = 500,
+) -> list[Event]:
     """Collect recent commits from ``repo`` as ``Event`` objects.
 
     Uses ``git log --all`` so commits on *any* branch are captured (a coding day
     often spans several branches, not just the one currently checked out).
-    Merge commits are skipped. Returns ``[]`` if the path is not a repo or has
+    Merge commits are skipped. ``max_count=None`` removes the default 500-event
+    cap for window-wide statistics. Returns ``[]`` if the path is not a repo or has
     no commits in range.
     """
     fmt = _SEP.join(["%ct", "%h", "%s"])
@@ -102,8 +105,7 @@ def collect_commits(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
             f"--since={since}",
             f"--pretty=format:{fmt}",
             "--no-merges",
-            "-n",
-            "500",
+            *([] if max_count is None else ["-n", str(max_count)]),
         ],
     )
     if not out:
@@ -131,18 +133,21 @@ def collect_commits(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
     return events
 
 
-def collect_reflog(repo: Path, *, since: str = _DEFAULT_SINCE) -> list[Event]:
+def collect_reflog(
+    repo: Path, *, since: str = _DEFAULT_SINCE, max_count: int | None = 500,
+) -> list[Event]:
     """Collect recent reflog entries (checkouts, resets, merges…) as events.
 
     The reflog records HEAD movements with their own timestamps, capturing the
-    branch-hopping navigation a coding day is full of. Returns ``[]`` when the
+    branch-hopping navigation a coding day is full of. ``max_count=None`` removes
+    the default 500-event cap. Returns ``[]`` when the
     repo has no reflog (e.g. a brand-new repo) or on any git error.
     """
     fmt = _SEP.join(["%gD", "%h", "%gs"])
     out = _run_git(
         repo,
         ["reflog", "show", f"--since={since}", "--date=unix",
-         f"--pretty=format:{fmt}", "-n", "500"],
+         f"--pretty=format:{fmt}", *([] if max_count is None else ["-n", str(max_count)])],
     )
     if not out:
         return []
@@ -174,6 +179,7 @@ def collect_repo(
     *,
     since: str = _DEFAULT_SINCE,
     include_reflog: bool = True,
+    max_count: int | None = 500,
 ) -> list[Event]:
     """Collect commits (and optionally reflog) for a single ``repo``.
 
@@ -183,9 +189,9 @@ def collect_repo(
     repo = repo.expanduser()
     if not is_git_repo(repo):
         return []
-    events = collect_commits(repo, since=since)
+    events = collect_commits(repo, since=since, max_count=max_count)
     if include_reflog:
-        events += collect_reflog(repo, since=since)
+        events += collect_reflog(repo, since=since, max_count=max_count)
     return events
 
 
@@ -194,6 +200,7 @@ def collect(
     *,
     since: str = _DEFAULT_SINCE,
     include_reflog: bool = True,
+    max_count: int | None = 500,
 ) -> list[Event]:
     """Collect git events across every repo in ``repos``.
 
@@ -202,5 +209,7 @@ def collect(
     """
     out: list[Event] = []
     for raw in repos:
-        out += collect_repo(Path(raw), since=since, include_reflog=include_reflog)
+        out += collect_repo(
+            Path(raw), since=since, include_reflog=include_reflog, max_count=max_count,
+        )
     return out
