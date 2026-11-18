@@ -39,6 +39,7 @@ yak tui                   # explore the tree interactively (collapse/expand)
 yak week                  # a week of rabbit holes as a depth heatmap
 yak saga --match oauth    # stitch one feature's multi-day journey into a story
 yak score                 # a single 0–100 focus score for today
+yak stats --since 30d     # local tangent trends, no model required
 yak blame path/to/file    # why one file kept pulling you back
 yak raw         # parse today's shell history into a table
 yak sessions    # group today's shell + git activity into work sessions
@@ -92,6 +93,45 @@ Every detour kind shows up — 📦 install, 🔥 error-fix, 📂 dir-change,
 "…which needed…which needed…" spiral. `yak demo --json` emits the same
 machine-readable forest as `yak today --json`, and `yak demo --since 7` replays
 the day across a week. When you're ready, point `yak today` at your *own* day.
+
+## `yak stats` — local tangent trends
+
+See weeks or months of focus patterns without Ollama, an LLM, or a network call:
+
+```bash
+yak stats                             # last 30 calendar days, including today
+yak stats --since 8w                   # days (30d/30) or weeks (8w)
+yak stats --from 2026-06-01 --to 2026-06-30
+yak stats --since 30d --repo ~/code/app # scope to one repo
+yak stats --rabbit-hole-threshold 4    # days whose max detour depth is > 4
+yak stats --since 30d --json            # stable stats document for piping
+```
+
+The Rich dashboard reports average/median detour depth, the deepest tangent
+(date and one-line description), rabbit-hole days, the five busiest tracked
+repos by event count, the most common detour trigger, and a daily yak-score
+sparkline. It reuses the sessionizer, tree classification and focus-score logic.
+Average and median give each **top-level detour** equal weight; its depth includes
+nested ordinary steps, exactly as `yak score` does. Sessions without detours
+still contribute focus scores, not artificial zero-depth tangents. Rabbit-hole
+days have maximum depth **strictly greater** than the threshold (default 6).
+Trigger counts include nested installs, directory changes, error/fix loops and
+branch switches. Ties in counts sort alphabetically; deepest ties keep the earliest.
+
+Dates are local and inclusive. `--to` defaults to today; `--from` cannot be
+combined with `--since`. Quiet days remain gaps in the sparkline and have `null`
+scores in JSON; an empty window has `null` average/median and deepest tangent,
+zero counts, and no fabricated focus score. JSON includes `kind: "stats"`,
+`from`, `to`, `summary` (including all repo/trigger counts), and daily `days` rows.
+
+Repos default to config or the current directory. Unscoped shell history still
+contributes to overall trends, but repo rankings only attribute known absolute
+working directories within tracked repos. Explicit `--repo` also filters shell
+events to those directories: bash/zsh entries without a recorded cwd are excluded
+rather than guessed. `--shell`, `--histfile`, `--idle-gap`, `--no-git`, and
+`--no-shell` work as on the other local views. Configured redaction is respected.
+Each history source is collected once per window, and git collection is widened
+beyond its ordinary seven-day/500-event defaults.
 
 ## `yak raw` — shell history collector
 

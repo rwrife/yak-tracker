@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich.tree import Tree as RichTree
 
 from .blame import Blame
@@ -18,6 +19,7 @@ from .models import Event
 from .narrate import Narration
 from .score import DayScore, ScoreHistory, sparkline
 from .sessionize import Session
+from .stats import StatsSummary
 from .tree import DetourKind, Node
 from .week import HEAT_LEVELS, WeekSummary, heat_level
 
@@ -328,6 +330,45 @@ def render_saga(
 
 
 # --- focus score (yak score) -----------------------------------------------
+
+
+def render_stats(stats: StatsSummary, *, console: Console | None = None) -> None:
+    """Render the local dashboard without interpreting history labels as markup."""
+    console = console or Console()
+    document = stats.to_dict()
+    summary = document["summary"]
+    body = Text()
+    body.append(
+        f"{summary['sessions']} session(s) across {summary['active_days']} active day(s)\n",
+        style="bold",
+    )
+    if not summary["sessions"]:
+        body.append("No activity in this window.\n", style="dim")
+    avg, med = summary["avg_depth"], summary["median_depth"]
+    body.append(
+        "Detour depth: no detours\n" if avg is None
+        else f"Detour depth: avg {avg:.2f} / median {med:.2f}\n"
+    )
+    if stats.deepest is not None:
+        body.append(
+            f"Deepest tangent: depth {stats.deepest.depth} on {stats.deepest.day.isoformat()}"
+            f" - {stats.deepest.label}\n"
+        )
+    else:
+        body.append("Deepest tangent: none\n")
+    body.append(
+        f"Rabbit-hole days (depth > {stats.threshold}): {summary['rabbit_hole_days']}\n"
+    )
+    body.append("Busiest repos (events):\n", style="bold")
+    if stats.busiest_repos:
+        for repo, count in list(stats.busiest_repos.items())[:5]:
+            body.append(f"  {repo}: {count}\n")
+    else:
+        body.append("  none with a known repo\n", style="dim")
+    body.append(f"Most common detour trigger: {summary['most_common_trigger'] or 'none'}\n")
+    body.append("Daily yak-score (0-100; higher = focused, spaces = quiet):\n")
+    body.append(sparkline([day.score for day in stats.history.days]), style="cyan")
+    console.print(Panel(body, title=f"Yak stats - {document['from']} to {document['to']}"))
 
 # Focus-score colour ramp (low → high). A high score is good (focused), so green
 # is the *top* of the range and red the bottom — the inverse of the heatmap,

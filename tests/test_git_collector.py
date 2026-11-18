@@ -105,6 +105,25 @@ def test_collect_commits_non_repo_is_empty(tmp_path: Path) -> None:
     assert git.collect_commits(tmp_path) == []
 
 
+@pytest.mark.parametrize("collector", [git.collect_commits, git.collect_reflog])
+def test_window_collection_can_remove_event_cap(
+    collector, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run_git(repo: Path, args: list[str]) -> str:
+        calls.append(args)
+        return ""
+
+    monkeypatch.setattr(git, "_run_git", run_git)
+    collector(tmp_path, since="2025-01-01 00:00:00", max_count=None)
+    assert "--since=2025-01-01 00:00:00" in calls[0]
+    assert "-n" not in calls[0]
+    calls.clear()
+    collector(tmp_path)
+    assert calls[0][-2:] == ["-n", "500"]
+
+
 def test_collect_commits_respects_since(repo: Path) -> None:
     # Nothing committed in the last second → empty, but no crash.
     assert git.collect_commits(repo, since="1.second.ago") == []

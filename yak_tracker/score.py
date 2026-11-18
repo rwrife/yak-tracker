@@ -62,6 +62,8 @@ __all__ = [
     "DayScore",
     "ScoreHistory",
     "score_session",
+    "detour_branches",
+    "detour_depths",
     "score_day",
     "build_history",
     "sparkline",
@@ -87,7 +89,7 @@ SCALE = 10.0
 SPARK_TICKS = "▁▂▃▄▅▆▇█"
 
 
-def _detour_branches(root: Node) -> list[Node]:
+def detour_branches(root: Node) -> list[Node]:
     """Top-level detours hanging off a session ``root``.
 
     Plain ``STEP`` children are ordinary in-line work, not tangents, so they
@@ -95,6 +97,11 @@ def _detour_branches(root: Node) -> list[Node]:
     error-fix / dir-change / branch-switch) is a real rabbit-hole entrance.
     """
     return [c for c in root.children if c.kind != DetourKind.STEP]
+
+
+def detour_depths(root: Node) -> list[int]:
+    """Depth of each top-level detour, using the focus score's definition."""
+    return [1 + branch.max_depth() for branch in detour_branches(root)]
 
 
 @dataclass(slots=True)
@@ -234,9 +241,9 @@ def score_session(root: Node) -> SessionScore:
     an install that triggered a forced fix that triggered a branch switch is
     depth ``3``.
     """
-    branches = _detour_branches(root)
+    depths = detour_depths(root)
 
-    if not branches:
+    if not depths:
         # No real tangents — focus held, regardless of in-line steps.
         return SessionScore(
             intention=root.label,
@@ -246,13 +253,12 @@ def score_session(root: Node) -> SessionScore:
             score=100.0,
         )
 
-    depths = [1 + b.max_depth() for b in branches]
     avg_depth = sum(depths) / len(depths)
     max_depth = max(depths)
 
     return SessionScore(
         intention=root.label,
-        detours=len(branches),
+        detours=len(depths),
         avg_depth=avg_depth,
         max_depth=max_depth,
         score=_focus_from_penalty(avg_depth, max_depth),
