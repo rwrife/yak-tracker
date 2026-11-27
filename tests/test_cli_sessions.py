@@ -137,3 +137,22 @@ def test_sessions_idle_gap_flag_changes_bucketing(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert "idle gap 0.5m" in result.stdout
+
+
+def test_browser_collector_is_not_called_when_disabled(monkeypatch) -> None:
+    from yak_tracker import cli
+    from yak_tracker.collectors import browser
+    from yak_tracker.config import Config
+
+    called = False
+
+    def collect(*args, **kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(browser, "collect_for_range", collect)
+
+    target = datetime(2025, 6, 17).date()
+    assert cli._collect_browser_events(Config(), target, target) == []
+    assert called is False

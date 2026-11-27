@@ -11,22 +11,13 @@ Three outputs from the same data:
 
 ## Status
 
-✅ **v0.1.0 is here.** The full milestone arc has shipped: the CLI scaffold
-(M1), the **shell-history collector (M2)** — `yak raw` parses your bash/zsh
-history into normalized events — the **git collector + sessionizer (M3)** — `yak
-sessions` interleaves git commits/reflog with shell history and buckets it into
-time-gapped work sessions — the **yak-shaving tree (M4)** — `yak today`
-reconstructs each session as an intention with its rabbit holes nested beneath
-it — **Ollama narration (M5)** — `yak today --format standup|story|learning`
-narrates the tree with your local LLM, with a config file and graceful offline
-fallback — and **packaging polish (M6)**: `yak demo` shows a built-in sample day
-with zero setup, `yak today --json` and `--since N` cover scripting and
-multi-day rollups, and the tool installs cleanly via pipx/uv/pip. Two v0.2
-backlog features landed early too: **`yak week`** rolls a whole week into a
-tangent-depth heatmap, a **redaction pass** scrubs secrets before they ever
-leave the box, and **`yak score`** distils a day to a single 0–100 focus number.
-See [`CHANGELOG.md`](./CHANGELOG.md) for the full release notes
-and [`PLAN.md`](./PLAN.md) for the roadmap.
+✅ **v0.2.0 closes the original roadmap.** The local-first CLI now combines
+shell and git activity with optional browser-history visits, builds daily and
+multi-day yak-shaving trees, and supports stats, scoring, exports, narration,
+and standup delivery. Browser collection is disabled by default and uses a
+read-only local database snapshot. See [`CHANGELOG.md`](./CHANGELOG.md) for
+release notes and [`PLAN.md`](./PLAN.md) for the shipped scope and deferred
+editor-integration idea.
 
 ```bash
 yak --version   # 🐃 it's alive
@@ -211,6 +202,33 @@ empty result rather than erroring.
 
 A session boundary is any gap **strictly greater** than `--idle-gap` minutes
 between consecutive events (default 25). Repos default to the current directory.
+
+## Optional browser-history correlation
+
+Browser visits can be added to `yak sessions`, `yak today`, `yak week`,
+`yak saga`, `yak score`, `yak stats`, `yak tui`, and `yak post` as timestamped
+leaf detours. This is strictly opt-in; the collector is not loaded unless
+`enabled = true`.
+
+```toml
+[browser]
+enabled = true
+browser = "firefox" # firefox, chrome, or chromium
+detail = "domain"   # domain (safe default) or full URL
+# profile = "~/.mozilla/firefox/abc.default-release"
+```
+
+Omit `profile` to discover a default profile, or set it to a profile directory
+or the browser's `places.sqlite`/`History` database. The collector reads the
+database read-only, snapshots it into a temporary local SQLite file, and never
+modifies the browser database. Only HTTP(S) visits in the requested date range
+are included. A missing, locked, or incompatible database produces a warning
+and leaves the other activity sources usable. `domain` omits paths and query
+strings; `full` includes the URL, with the normal redaction pass applied before
+rendering, JSON export, or narration. Browser history stays local unless you
+choose a non-local narration backend.
+
+`yak raw` remains focused on shell history and does not display browser visits.
 
 ## `yak today` — the yak-shaving tree, narrated
 

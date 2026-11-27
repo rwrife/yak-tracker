@@ -20,7 +20,7 @@ def _resolve_version() -> str:
     try:
         return metadata.version("yak-tracker")
     except metadata.PackageNotFoundError:  # pragma: no cover - dev-only path
-        return "0.1.0"
+        return "0.2.0"
 
 
 __version__ = _resolve_version()

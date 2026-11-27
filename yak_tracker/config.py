@@ -28,6 +28,12 @@ Recognised keys (all optional)::
     redact = true                       # scrub secrets/tokens before they leave the box
     vault_path = "~/notes"              # default dir for `yak today --export md`
     filename_template = "{date}.md"     # export filename ({date} = YYYY-MM-DD)
+
+    [browser]
+    enabled = false                     # include local browser visits in sessions
+    browser = "firefox"                 # firefox, chrome, or chromium
+    detail = "domain"                   # domain (safe default) or full URL
+    # profile = "~/.mozilla/firefox/abc.default-release"
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from .post import VALID_PLATFORMS
 
 __all__ = [
     "Config",
+    "BrowserConfig",
     "ConfigExistsError",
     "DEFAULTS",
     "FILENAME_PLACEHOLDER",
@@ -60,6 +67,18 @@ VALID_FORMATS: tuple[str, ...] = ("standup", "story", "learning")
 # endpoint (LM Studio, llama.cpp server, local proxies). Kept here so config
 # validation and the backend factory share one source of truth.
 VALID_BACKENDS: tuple[str, ...] = ("ollama", "openai_compat")
+VALID_BROWSERS: tuple[str, ...] = ("firefox", "chrome", "chromium")
+VALID_BROWSER_DETAILS: tuple[str, ...] = ("domain", "full")
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserConfig:
+    """Opt-in browser-history collection settings."""
+
+    enabled: bool = False
+    browser: str = "firefox"
+    profile: Path | None = None
+    detail: str = "domain"
 
 # Built-in defaults. Mirrors PLAN.md: local Ollama, 25-minute idle gap.
 DEFAULTS: dict[str, object] = {
@@ -74,6 +93,7 @@ DEFAULTS: dict[str, object] = {
     "redact": True,
     "vault_path": None,
     "filename_template": "{date}.md",
+    "browser": BrowserConfig(),
 }
 
 # The single placeholder a filename template may contain. Kept here so the
@@ -157,6 +177,14 @@ filename_template = "{date}.md"
 # [post]
 # slack = "https://hooks.slack.com/services/T000/B000/XXXX"
 # discord = "https://discord.com/api/webhooks/000/XXXX"
+
+# Browser history is strictly opt-in. The default profile is discovered for the
+# selected browser; `profile` may name a profile directory or its history DB.
+[browser]
+enabled = false
+browser = "firefox" # firefox, chrome, or chromium
+detail = "domain"   # domain (safe default) or full URL
+# profile = "~/.mozilla/firefox/abc.default-release"
 """
 
 
@@ -198,6 +226,7 @@ class Config:
     vault_path: Path | None = None
     filename_template: str = "{date}.md"
     post_webhooks: dict[str, str] = field(default_factory=dict)
+    browser: BrowserConfig = field(default_factory=BrowserConfig)
     path: Path | None = None
     source: str = "defaults"
     warnings: tuple[str, ...] = field(default_factory=tuple)
@@ -411,6 +440,46 @@ def _coerce_post_table(
     return webhooks
 
 
+def _coerce_browser_table(raw: object, warnings: list[str]) -> BrowserConfig | None:
+    """Validate opt-in browser history settings."""
+    if not isinstance(raw, dict):
+        warnings.append("'browser' must be a table (e.g. [browser]); ignoring it")
+        return None
+
+    values: dict[str, object] = {}
+    if "enabled" in raw:
+        enabled = _coerce_bool(raw["enabled"], "browser.enabled", warnings)
+        if enabled is not None:
+            values["enabled"] = enabled
+    if "browser" in raw:
+        browser = _coerce_str(raw["browser"], "browser.browser", warnings)
+        if browser is not None:
+            if browser in VALID_BROWSERS:
+                values["browser"] = browser
+            else:
+                warnings.append(
+                    f"'browser.browser' must be one of {', '.join(VALID_BROWSERS)}; "
+                    f"got {browser!r}, ignoring it"
+                )
+    if "profile" in raw:
+        profile = _coerce_path(raw["profile"], "browser.profile", warnings)
+        if profile is not None:
+            values["profile"] = profile
+    if "detail" in raw:
+        detail = _coerce_str(raw["detail"], "browser.detail", warnings)
+        if detail is not None:
+            if detail in VALID_BROWSER_DETAILS:
+                values["detail"] = detail
+            else:
+                warnings.append(
+                    f"'browser.detail' must be one of {', '.join(VALID_BROWSER_DETAILS)}; "
+                    f"got {detail!r}, ignoring it"
+                )
+    for unknown in sorted(set(raw) - {"enabled", "browser", "profile", "detail"}):
+        warnings.append(f"unknown config key 'browser.{unknown}'; ignoring it")
+    return replace(BrowserConfig(), **values)
+
+
 def _parse_table(
     data: dict[str, object], warnings: list[str]
 ) -> dict[str, object]:
@@ -487,6 +556,11 @@ def _parse_table(
         if webhooks:
             values["post_webhooks"] = webhooks
 
+    if "browser" in data:
+        browser = _coerce_browser_table(data["browser"], warnings)
+        if browser is not None:
+            values["browser"] = browser
+
     known = {
         "repos",
         "idle_gap",
@@ -500,6 +574,7 @@ def _parse_table(
         "vault_path",
         "filename_template",
         "post",
+        "browser",
     }
     for unknown in sorted(set(data) - known):
         warnings.append(f"unknown config key {unknown!r}; ignoring it")
