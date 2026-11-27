@@ -83,22 +83,22 @@ Key modules: `collectors/*` (pluggable sources), `tree.py` (the differentiating 
 5. **M5 — Ollama narration + formats.** `narrate.py` calls local Ollama; `--format standup|story|learning`; graceful no-Ollama fallback. Config file support.
 6. **M6 — Polish + package.** README with demo, sample config, install docs, JSON output (`--json`), and a `--since`/`--date` flag. Tag v0.1.0.
 
-## 8. Backlog / future features (v0.2+)
+## 8. Delivered v0.2 scope
 
-1. **`yak week`** — roll up a whole week into a tangent heatmap (which days were rabbit-hole days).
-2. **Fish + nushell collectors** — broaden shell support.
-3. **Editor signal** — optional VS Code/Neovim activity log import for finer intent.
-4. **"Yak score"** — a daily metric for how deep your average detour went (gamify focus).
-5. **Browser-history correlation** — opt-in: tie Stack Overflow / docs tabs to the detour that caused them.
-6. **Pluggable LLM backends** — llama.cpp, LM Studio, or a redacting cloud option.
-7. **Markdown export → Obsidian/daily-notes** — drop the learning log straight into a notes vault.
-8. **`yak blame <file>` reflection** — "why did I touch this file 9 times today?"
-9. **Slack/Discord standup poster** — push the `standup` format to a channel each morning.
-10. **Redaction pass** — scrub secrets/tokens from shell history before they ever reach the prompt.
-11. **TUI mode** — interactive collapsible tree (textual) instead of static render.
-12. **Multi-day "saga" view** — stitch a feature's whole multi-day journey into one narrative.
+- `yak week`, `yak score`, and local `yak stats`.
+- Fish and nushell history collectors.
+- Opt-in browser-history correlation (Firefox and Chromium-family SQLite stores).
+- Pluggable narration backends, markdown export, and `yak blame`.
+- Slack/Discord standup delivery with redaction, plus the interactive TUI.
+- Multi-day `yak saga` narrative.
 
-## 9. Out of scope
+## 9. Deferred follow-up
+
+- **Editor activity integration** is deferred. VS Code and Neovim do not share a
+  stable, timestamped local activity-log format; defining and supporting those
+  adapters needs its own requirements rather than guessing at private storage.
+
+## 10. Out of scope
 
 - No cloud sync, accounts, or hosted SaaS backend.
 - No real-time shell hooking/daemon — v0.1 reads history after the fact, it does not instrument your shell live.

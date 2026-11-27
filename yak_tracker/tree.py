@@ -66,6 +66,7 @@ class DetourKind:
     BRANCH = "branch-switch"
     ROOT = "root"
     STEP = "step"
+    BROWSER = "browser-visit"
 
 
 # Commands that are pure navigation/noise and should never *become* a root
@@ -207,6 +208,9 @@ def classify_event(event: Event, *, current_repo: str | None) -> tuple[str, str]
     """
     cmd = event.cmd
 
+    if event.source.startswith("browser:"):
+        return DetourKind.BROWSER, _short(cmd)
+
     branch = _BRANCH_RE.search(cmd)
     if branch:
         frm, to = branch.group("from"), branch.group("to")
@@ -244,12 +248,19 @@ def _root_label(session: Session) -> tuple[str, Event | None]:
 
     # 2. first substantive command (skip pure navigation/noise)
     for ev in session.events:
+        if ev.source.startswith("browser:"):
+            continue
         if not _TRIVIAL_RE.match(ev.cmd) and not ev.cmd.startswith("reflog "):
             return _short(ev.cmd), ev
 
     # 3. fall back to the very first event, or a generic label
     if session.events:
-        first = session.events[0]
+        first = next(
+            (event for event in session.events if not event.source.startswith("browser:")),
+            session.events[0],
+        )
+        if first.source.startswith("browser:"):
+            return "browser research", None
         return _short(first.cmd), first
     return "session", None
 
@@ -288,6 +299,9 @@ def build_tree(session: Session) -> Node:
             continue
 
         kind, label = classify_event(ev, current_repo=current_repo)
+        if ev.source.startswith("browser:"):
+            root.add(Node(label=label, kind=kind, event=ev))
+            continue
         active = spine[-1]
 
         if kind == DetourKind.STEP:

@@ -183,6 +183,42 @@ def test_with_overrides_can_force_redact_off() -> None:
     assert base.with_overrides(redact=None).redact is True
 
 
+def test_browser_collection_is_disabled_by_default(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.browser.enabled is False
+    assert cfg.browser.browser == "firefox"
+    assert cfg.browser.profile is None
+    assert cfg.browser.detail == "domain"
+
+
+def test_browser_config_accepts_profile_and_privacy_detail(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        '[browser]\nenabled = true\nbrowser = "chrome"\n'
+        'profile = "~/Chrome/Profile 1"\ndetail = "full"\n'
+    )
+
+    cfg = load_config(cfg_file)
+
+    assert cfg.browser.enabled is True
+    assert cfg.browser.browser == "chrome"
+    assert cfg.browser.profile == Path.home() / "Chrome" / "Profile 1"
+    assert cfg.browser.detail == "full"
+    assert cfg.warnings == ()
+
+
+def test_invalid_browser_options_warn_and_keep_safe_defaults(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('[browser]\nenabled = "yes"\nbrowser = "safari"\ndetail = "full-url"\n')
+
+    cfg = load_config(cfg_file)
+
+    assert cfg.browser.enabled is False
+    assert cfg.browser.browser == "firefox"
+    assert cfg.browser.detail == "domain"
+    assert len(cfg.warnings) == 3
+
+
 # --- starter config / `yak config --init` (M6) ---------------------------
 
 
@@ -212,6 +248,7 @@ def test_starter_config_round_trips_to_defaults(tmp_path: Path) -> None:
     assert cfg.vault_path is None
     assert cfg.vault_path == DEFAULTS["vault_path"]
     assert cfg.filename_template == DEFAULTS["filename_template"]
+    assert cfg.browser == DEFAULTS["browser"]
     # repos is commented out in the starter, so it stays at the default (empty).
     assert cfg.repos == ()
 

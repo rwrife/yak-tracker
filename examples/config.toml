@@ -67,3 +67,14 @@ filename_template = "{date}.md"
 # [post]
 # slack = "https://hooks.slack.com/services/T000/B000/XXXX"
 # discord = "https://discord.com/api/webhooks/000/XXXX"
+
+# Browser history is strictly opt-in and disabled by default. When enabled,
+# local HTTP(S) visits are correlated by timestamp with your coding sessions.
+# `profile` may be a profile directory or the `places.sqlite`/`History` file;
+# omit it to discover the browser's default profile. `domain` never includes
+# paths or query strings; `full` includes URLs and still applies redaction.
+[browser]
+enabled = false
+browser = "firefox" # firefox, chrome, or chromium
+detail = "domain"   # domain or full
+# profile = "~/.mozilla/firefox/abc.default-release"

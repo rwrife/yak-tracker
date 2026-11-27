@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-27
+
 ### Added
+
+- **Opt-in browser-history correlation** — `yak sessions`, `today`, `week`,
+  `saga`, `score`, `stats`, `tui`, and `post` can include timestamped browser
+  visits. Firefox and Chromium-family history databases are snapshotted from a
+  read-only connection into a temporary SQLite file. The `[browser]` config
+  block is disabled by default; `detail = "domain"` omits paths and query
+  strings, while `detail = "full"` passes URLs through the configured redaction
+  layer. Missing, locked, and incompatible databases warn and skip only this
+  source. No additional runtime dependency is introduced. (#39)
 
 - **`yak saga` — stitch a multi-day feature journey into one narrative.** Where
   `yak today`/`yak week` are day-scoped, `yak saga` follows a *single thread*
@@ -153,5 +164,6 @@ leaves the machine.
 - Builds a wheel and sdist with Hatchling. Requires Python 3.11+.
 - CI runs `ruff` + `pytest` on Python 3.11 and 3.12. 192 tests, ruff clean.
 
-[Unreleased]: https://github.com/rwrife/yak-tracker/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rwrife/yak-tracker/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rwrife/yak-tracker/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rwrife/yak-tracker/releases/tag/v0.1.0

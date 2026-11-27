@@ -35,3 +35,4 @@ htmlcov/
 config.local.toml
 *.local.toml
 .yak/
+.worktrees/

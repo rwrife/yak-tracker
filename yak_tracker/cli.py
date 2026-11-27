@@ -24,7 +24,13 @@ from .collectors import fish as fish_collector
 from .collectors import git as git_collector
 from .collectors import nushell as nushell_collector
 from .collectors import shell as shell_collector
-from .config import VALID_FORMATS, ConfigExistsError, load_config, write_starter_config
+from .config import (
+    VALID_FORMATS,
+    Config,
+    ConfigExistsError,
+    load_config,
+    write_starter_config,
+)
 from .export import (
     ExportError,
     _forest_markdown,  # deterministic outline fallback body
@@ -217,6 +223,7 @@ def _collect_day_events(
     no_git: bool,
     no_shell: bool,
     redact: bool = True,
+    browser_events: list[Event] | None = None,
 ) -> list:
     """Collect a day's shell + git events (shared by ``sessions`` and ``today``)."""
     collected: list = []
@@ -235,7 +242,31 @@ def _collect_day_events(
         repo_paths = list(repos) if repos else [Path.cwd()]
         git_events = git_collector.collect(repo_paths)
         collected += [e for e in git_events if e.on_date(target)]
+    if browser_events is not None:
+        collected += [event for event in browser_events if event.on_date(target)]
     return collected
+
+
+def _collect_browser_events(
+    config: Config,
+    start: date,
+    end: date,
+    *,
+    redact: bool | None = None,
+) -> list[Event]:
+    """Load browser history once for a command window, only when opted in."""
+    if not config.browser.enabled:
+        return []
+    from .collectors.browser import collect_for_range
+
+    return collect_for_range(
+        start,
+        end,
+        browser=config.browser.browser,
+        profile=config.browser.profile,
+        detail=config.browser.detail,
+        redact=config.redact if redact is None else redact,
+    )
 
 
 @app.command()
@@ -294,6 +325,9 @@ def sessions(
     commands are redacted by default; pass ``--no-redact`` to keep them raw.
     """
     target = _parse_date(date_str)
+    browser_events = _collect_browser_events(
+        load_config(), target, target, redact=not no_redact
+    )
 
     collected = _collect_day_events(
         target,
@@ -303,6 +337,7 @@ def sessions(
         no_git=no_git,
         no_shell=no_shell,
         redact=not no_redact,
+        browser_events=browser_events,
     )
 
     day_sessions = sessionize(collected, idle_gap=idle_gap)
@@ -496,6 +531,7 @@ def today(
         redact=False if no_redact else None,
         filename_template=template,
     )
+    browser_events = _collect_browser_events(config, days[0], days[-1])
 
     def _forest_for(day: date) -> list:
         collected = _collect_day_events(
@@ -506,6 +542,7 @@ def today(
             no_git=no_git,
             no_shell=no_shell,
             redact=config.redact,
+            browser_events=browser_events,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
@@ -724,6 +761,7 @@ def tui(
         format=fmt,
         redact=False if no_redact else None,
     )
+    browser_events = _collect_browser_events(config, target, target)
 
     collected = _collect_day_events(
         target,
@@ -733,6 +771,7 @@ def tui(
         no_git=no_git,
         no_shell=no_shell,
         redact=config.redact,
+        browser_events=browser_events,
     )
     day_sessions = sessionize(collected, idle_gap=config.idle_gap)
     forest = build_forest(day_sessions)
@@ -1106,6 +1145,7 @@ def week(
         repos=list(repos) if repos else None,
         redact=False if no_redact else None,
     )
+    browser_events = _collect_browser_events(config, end - timedelta(days=span - 1), end)
 
     def _forest_for(day: date) -> list:
         collected = _collect_day_events(
@@ -1116,6 +1156,7 @@ def week(
             no_git=no_git,
             no_shell=no_shell,
             redact=config.redact,
+            browser_events=browser_events,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
@@ -1299,6 +1340,7 @@ def saga(
         format=fmt,
         redact=False if no_redact else None,
     )
+    browser_events = _collect_browser_events(config, days[0], days[-1])
 
     repo_paths = [p.expanduser().resolve() for p in config.repos] or [Path.cwd()]
     git_events: list[Event] = []
@@ -1337,6 +1379,7 @@ def saga(
             no_git=True,
             no_shell=no_shell,
             redact=config.redact,
+            browser_events=browser_events,
         )
         collected += [event for event in git_events if event.on_date(day)]
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
@@ -1462,6 +1505,10 @@ def score(
         repos=list(repos) if repos else None,
         redact=False if no_redact else None,
     )
+    browser_start = (
+        end - timedelta(days=(since or DEFAULT_HISTORY_DAYS) - 1) if history else end
+    )
+    browser_events = _collect_browser_events(config, browser_start, end)
 
     def _forest_for(day: date) -> list:
         collected = _collect_day_events(
@@ -1472,6 +1519,7 @@ def score(
             no_git=no_git,
             no_shell=no_shell,
             redact=config.redact,
+            browser_events=browser_events,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
@@ -1550,6 +1598,7 @@ def stats(
         if histfile is None:
             collected += fish_collector.collect(redact=config.redact)
             collected += nushell_collector.collect(redact=config.redact)
+    collected += _collect_browser_events(config, start, end)
     if not no_git:
         # Widen beyond the collector's seven-day/500-event defaults, once per window.
         collected += git_collector.collect(
@@ -1648,6 +1697,14 @@ def config_cmd(
     table.add_row("timeout", f"{cfg.timeout:g} s")
     table.add_row("format", cfg.format)
     table.add_row("redact", "on" if cfg.redact else "[red]off[/red]")
+    browser_profile = (
+        str(cfg.browser.profile) if cfg.browser.profile else "[dim](auto)[/dim]"
+    )
+    table.add_row(
+        "browser history",
+        f"{'on' if cfg.browser.enabled else 'off'}; {cfg.browser.browser}; "
+        f"{cfg.browser.detail}; profile {browser_profile}",
+    )
     post_display = (
         "\n".join(f"{p}: {url}" for p, url in sorted(cfg.post_webhooks.items()))
         if cfg.post_webhooks
@@ -1790,6 +1847,7 @@ def post(
         format=fmt or "standup",
         redact=False if no_redact else None,
     )
+    browser_events = _collect_browser_events(config, days[0], days[-1])
 
     webhook_url = webhook or config.post_webhooks.get(platform)
     if not webhook_url and not dry_run:
@@ -1807,6 +1865,7 @@ def post(
             no_git=no_git,
             no_shell=no_shell,
             redact=config.redact,
+            browser_events=browser_events,
         )
         day_sessions = sessionize(collected, idle_gap=config.idle_gap)
         return build_forest(day_sessions)
